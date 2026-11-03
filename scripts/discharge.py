@@ -161,8 +161,9 @@ def aggregate(args):
         proto = PROTO[tg]; f0 = os.path.join(args.results, "traj", f"discharge_{proto}_{tg}_s0.npz")
         if not os.path.exists(f0): continue
         r = load_reference(proto, tg, args.data); d = np.load(f0); t = r["t"]; I = r["I"]
+        if len(d["eta"]) != len(t): continue                                    # truncated (quick) run
         s_on, k_end, _, _ = window_3c(I, t); t_on = t[s_on]
-        idx = np.where((t >= t_on - FIG_PRE_S) & (t <= t[k_end] + FIG_POST_S))[0]
+        idx = np.where((t >= t_on - FIG_PRE_S - 1e-6) & (t <= t[k_end] + FIG_POST_S))[0]       # 1e-6: the time stamps carry ~1e-12 jitter
         ref = np.array([interface_ref(r, i, P0, r["Rf"]) for i in idx]); tc = t[k_end + 1] - t_on
         parts.append(pd.DataFrame(dict(theta=tg, protocol=proto, t_from_3C_onset_s=t[idx] - t_on, current_A=I[idx], voltage_reference_V=r["V"][idx], eta_reference_mV=1e3 * ref[:, 0], eta_EKF_mV=1e3 * d["eta"][idx],
                                        eta_UKF_SPMe_mV=1e3 * d["spme_eta"][idx], phi_pl_reference_mV=1e3 * ref[:, 1], phi_pl_EKF_mV=1e3 * d["ppl"][idx], phi_pl_UKF_SPMe_mV=1e3 * d["spme_ppl"][idx])))

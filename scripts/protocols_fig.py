@@ -5,7 +5,7 @@ Writes four plain CSV files (columns ``t_h,I_A,V_V``, no header comment, so that
     prot_F6Q_th2.csv   reference F6Q, state th2: every 4th sample (2 s), from ``ref_F6Q_th2_m40-20-40_dt0.5.npz``
     prot_RPT.csv       ageing reference run, cycle index 10 (the first reference performance test, RPT 1): every 20th sample (10 s)
     prot_P4.csv        ageing reference run, cycle index 11 (the first P4 cycle after RPT 1): every 10th sample (5 s)
-Time is in hours from the start of the protocol / cycle; t_h is written with 5 decimals, current and voltage rounded to 4 decimals.
+Time is in hours from the start of the protocol / cycle; t_h is written with 5 decimals, current with 4 and voltage with 5 significant digits (the stored figure files; line endings are LF).
 
 The ageing reference run is the file ``aging_dyn_rptslow_full.npz`` of the data folder (PyBaMM, 10 x [RPT + 9 P4 cycles] + final RPT, period 0.5 s). It is read here directly
 with ``numpy.load``; the keys used are:
@@ -34,7 +34,7 @@ def write_trace(path, t_s, I, V):
     """Write the three columns in the format of the figure data files."""
     with open(path, "w", encoding="utf-8", newline="") as f:
         f.write("t_h,I_A,V_V\n")
-        for a, b, c in zip(t_s / 3600.0, np.round(I, 4), np.round(V, 4)): f.write("%.5f,%g,%g\n" % (a, b, c))
+        for a, b, c in zip(t_s / 3600.0, I, V): f.write("%.5f,%.4g,%.5g\n" % (a, b, c))
 
 
 def main():

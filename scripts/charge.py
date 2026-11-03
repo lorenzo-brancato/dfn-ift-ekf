@@ -239,7 +239,9 @@ def aggregate(args):
     for th in ("th1", "th2", "th4"):
         f0 = os.path.join(args.results, "traj", f"charge_{th}_s0.npz")
         if not os.path.exists(f0): continue
-        r, ref = refs.get(th); d = np.load(f0); I = np.asarray(r["I"]); p = [q for q in pulses(I) if q["label"] == "-2C"][0]; a, b = p["a"], p["b"]
+        r, ref = refs.get(th); d = np.load(f0); I = np.asarray(r["I"])
+        if len(d["eta"]) != len(I): continue                                    # truncated (quick) run
+        p = [q for q in pulses(I) if q["label"] == "-2C"][0]; a, b = p["a"], p["b"]
         idx = np.arange(a - 60, min(b + 240, len(I))); tt = (idx - a) * 0.5
         parts.append(pd.DataFrame(dict(theta=th, t_from_pulse_start_s=tt, current_A=I[idx], voltage_reference_V=r["V"][idx], eta_reference_mV=1e3 * ref[idx, 0], eta_EKF_mV=1e3 * d["eta"][idx], eta_UKF_SPMe_mV=1e3 * d["spme_eta"][idx],
                                        phi_pl_reference_mV=1e3 * ref[idx, 1], phi_pl_EKF_mV=1e3 * d["ppl"][idx], phi_pl_UKF_SPMe_mV=1e3 * d["spme_ppl"][idx])))

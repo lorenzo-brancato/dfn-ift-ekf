@@ -150,3 +150,15 @@ def load_net(path, grid="4:1", Nn=20, Ns=10, Np=20):
     cfg = make_config(Nn, Ns, Np, grid)
     S = pickle.load(open(path, "rb")); params = jax.tree_util.tree_map(jnp.asarray, S["params"]); norm = jax.tree_util.tree_map(jnp.asarray, S["norm"])
     return (lambda a, b, c, d, e: apply(params, norm, cfg, a, b, c, d, e)), cfg
+
+
+def predict(params, norm, cfg, D, idx, chunk=4000):
+    """Network reaction currents [len(idx), Nn + Np] for the samples ``idx`` of a training-set dict ``D`` (batched, jitted)."""
+    ap = jax.jit(jax.vmap(lambda a, b, c, d, e: apply(params, norm, cfg, a, b, c, d, e)))
+    idx = np.asarray(idx)
+    return np.concatenate([np.asarray(ap(*(jnp.asarray(D[k][idx[i:i + chunk]]) for k in ("csn", "csp", "ce", "I", "th")))) for i in range(0, len(idx), chunk)])
+
+
+def save_net(path, params, norm, grid, **meta):
+    """Save a trained network as a pickle with 'params' and 'norm' (numpy arrays), the grid it was trained for, and any extra metadata (history, split, ...)."""
+    pickle.dump(dict(params=jax.tree_util.tree_map(np.asarray, params), norm=jax.tree_util.tree_map(np.asarray, norm), grid=grid, weighted=True, **meta), open(path, "wb"))

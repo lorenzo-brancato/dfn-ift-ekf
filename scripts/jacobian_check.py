@@ -1,11 +1,13 @@
 """Sec. II-C: structured IFT Jacobian against automatic differentiation, and its cost.
 
 All comparisons use the SAME function Phi(z, theta, I) = [advance(z, closure_newton(z, I, theta, tol=1e-13)), V]: the converged closure, one step, the voltage.
-  (i)   agreement: relative error of dPhi/dz and dPhi/dtheta of the structured IFT Jacobian (`Struct.jac_full`, evaluated at the converged solution) with respect to
+  (i)   agreement (the converged closure is a lax.custom_root, i.e. itself implicit differentiation; therefore the agreement is also reported against jacfwd of EXPLICIT unrolled Newton maps without custom_root: k=1 started at the converged g, and k=3 started from g perturbed by 1e-3 relative; columns *_unrolled_k1, *_unrolled_k3_perturbed): relative error of dPhi/dz and dPhi/dtheta of the structured IFT Jacobian (`Struct.jac_full`, evaluated at the converged solution) with respect to
         `jax.jacfwd` through the converged Newton loop, on 7 states (P1_3C k=5,25; P2 k=100,640,1000; P6L k=20,600), 20/10/20, N_m = 12.   [paper: 6e-13]
   (ii)  cost on one state (N = 653, I = 5 A, theta = (4, 0.9, 0.55)): median and p99 of
           - the IFT pieces of the paper (LU + dj/dz + dj/dtheta) and the complete dense IFT Jacobian `jac_full` (dPhi/dz and dPhi/dtheta, all rows),
-          - jacfwd of Phi with the converged closure (dPhi/dz, dPhi/dtheta), the same function as in (i).
+          - jacfwd of Phi with the converged closure (dPhi/dz, dPhi/dtheta), the same function as in (i). NOTE: `closure_newton` is a `lax.custom_root`, so this jacfwd
+            differentiates implicitly (dense linear solve with the Jacobian of the residual), it does not unroll the Newton loop;
+          - jacfwd through one explicit Newton iteration started at the converged solution (the cost of differentiating a solver iteration).
   (iii) for continuity with the manuscript (labelled 'legacy'): jacfwd of the step with Newton FIXED at one iteration from a cold guess, EKF coordinates (Rf, LAM, Ds)
         [paper: 0.5 ms vs 122 ms]; the share of the EKF step spent in the model and its derivatives (f_and_lin / full step; paper 8 %); worst-case / median step time
         (paper 2.95); amortized (lax.scan over 1000 steps) against the dispatch cost (paper: 17 % lower).
@@ -58,6 +60,10 @@ def main():
         g = m.closure_newton(z, I, th, None, tol=1e-13)
         return jnp.concatenate([m.advance(z, g, th), A_.V_of(g, I)[None]])
 
+    def Phi_unrolled(z, th, I, g_start, kit=1):                       # AD reference without custom_root: kit explicit Newton iterations from the constant start g_start
+        csn, csp, ce = m.surf(z); g = A_.newton_fixed(g_start, csn, csp, ce, I, th, k=kit)[0]
+        return jnp.concatenate([m.advance(z, g, th), A_.V_of(g, I)[None]])
+
     if "agreement" in parts:
         groups = {"c_avg": S.ic, "modes": S.ia.reshape(-1), "tail": S.is_.reshape(-1), "c_e": S.ie}
         cases = [("P1_3C", [1.0, 0, 1.0], [5, 25]), ("P2", [5.0, 0.3, 1.0], [100, 640, 1000]), ("P6L", [1.0, 0, 1.0], [20, 600])]
@@ -76,6 +82,10 @@ def main():
                 Jz_ref = np.asarray(jax.jit(jax.jacfwd(Phi_V, 0))(z, th, I)); Jt_ref = np.asarray(jax.jit(jax.jacfwd(Phi_V, 1))(z, th, I))
                 rel = lambda x, y: float(np.linalg.norm(x - y) / np.linalg.norm(y))
                 row = dict(grid=f"{Nn}-{Ns}-{Np} {a.grid}", Nm=Nm, dt=dt, proto=proto, k=k, dPhi_dz_rel=rel(Jz, Jz_ref), dPhi_dtheta_rel=rel(Jt, Jt_ref))
+                gc = jax.lax.stop_gradient(g); gp = gc * (1.0 + 1e-3)                       # converged g (constant) and a 1e-3 relative perturbation of it
+                for lab, (g_start, kit) in dict(unrolled_k1=(gc, 1), unrolled_k3_perturbed=(gp, 3)).items():
+                    Rz = np.asarray(jax.jit(jax.jacfwd(Phi_unrolled, 0), static_argnames="kit")(z, th, I, g_start, kit=kit)); Rt = np.asarray(jax.jit(jax.jacfwd(Phi_unrolled, 1), static_argnames="kit")(z, th, I, g_start, kit=kit))
+                    row[f"dPhi_dz_rel_{lab}"] = rel(Jz, Rz); row[f"dPhi_dtheta_rel_{lab}"] = rel(Jt, Rt)
                 for rn, ri in dict(groups, V=np.array([nz])).items():
                     for cn, ci in groups.items():
                         nb = np.linalg.norm(Jz_ref[np.ix_(ri, ci)]); row[f"A[{rn},{cn}]"] = float(np.linalg.norm(Jz[np.ix_(ri, ci)] - Jz_ref[np.ix_(ri, ci)]) / max(nb, 1e-300))
@@ -122,6 +132,15 @@ def main():
             # same function as in the agreement test: converged closure
             Jz_c = jax.jit(jax.jacfwd(Phi_V, 0)); Jt_c = jax.jit(jax.jacfwd(Phi_V, 1))
             t_cz = timed("jacfwd_converged", "jacfwd dPhi/dz, converged closure", Jz_c, (z, th, I), n_jac); t_ct = timed("jacfwd_converged", "jacfwd dPhi/dtheta, converged closure", Jt_c, (z, th, I), n_jac)
+            # AD through one explicit Newton iteration started at the converged solution (g held constant): the cost of differentiating the solver iteration itself
+            def Phi_w(z, th_, I_, gc):
+                csn_, csp_, ce_ = m.surf(z); g_ = A_.newton_fixed(gc, csn_, csp_, ce_, I_, th_, k=1)[0]
+                return jnp.concatenate([m.advance(z, g_, th_), A_.V_of(g_, I_)[None]])
+            t_wz = timed("jacfwd_unrolled_k1", "jacfwd dPhi/dz, one Newton iteration unrolled from the converged solution", jax.jit(jax.jacfwd(Phi_w, 0)), (z, th, I, g), n_jac)
+            t_wt = timed("jacfwd_unrolled_k1", "jacfwd dPhi/dtheta, one Newton iteration unrolled from the converged solution", jax.jit(jax.jacfwd(Phi_w, 1)), (z, th, I, g), n_jac)
+            g3 = g * (1.0 + 1e-3); f3z = jax.jit(jax.jacfwd(lambda z_, th_, I_, g_: Phi_unrolled(z_, th_, I_, g_, 3), 0)); f3t = jax.jit(jax.jacfwd(lambda z_, th_, I_, g_: Phi_unrolled(z_, th_, I_, g_, 3), 1))
+            t_3z = timed("jacfwd_unrolled_k3", "jacfwd dPhi/dz, three Newton iterations unrolled from a perturbed start", f3z, (z, th, I, g3), n_jac)
+            t_3t = timed("jacfwd_unrolled_k3", "jacfwd dPhi/dtheta, three Newton iterations unrolled from a perturbed start", f3t, (z, th, I, g3), n_jac)
             # legacy: jacfwd of the step with Newton fixed at one iteration from a cold guess, EKF coordinates
             c_th = jnp.asarray(x0[nz:])
 
@@ -135,6 +154,8 @@ def main():
                      dict(group="summary", item="jacfwd converged closure: dPhi/dz + dPhi/dtheta, sum of the medians", N=N, median_ms=t_cz + t_ct),
                      dict(group="summary", item="ratio jacfwd converged / complete dense IFT Jacobian (same function)", N=N, median_ms=(t_cz + t_ct) / t_dense),
                      dict(group="summary", item="ratio jacfwd converged / IFT pieces", N=N, median_ms=(t_cz + t_ct) / t_ift),
+                     dict(group="summary", item="jacfwd unrolled k=1 Newton from converged g: dPhi/dz + dPhi/dtheta, sum of the medians", N=N, median_ms=t_wz + t_wt),
+                     dict(group="summary", item="jacfwd unrolled k=3 Newton from perturbed g: dPhi/dz + dPhi/dtheta, sum of the medians", N=N, median_ms=t_3z + t_3t),
                      dict(group="summary", item="legacy: jacfwd 1-iteration step: dPhi/dz + dPhi/dtheta, sum of the medians", N=N, median_ms=t_1z + t_1t),
                      dict(group="summary", item="legacy: ratio jacfwd 1-iteration / IFT pieces", N=N, median_ms=(t_1z + t_1t) / t_ift)]
         cli.write_csv(pd.DataFrame(rows), a, "jacobian_cost" + ("_quick" if a.quick else "") + ".csv", note=f"n_calls {n_calls} (IFT, step), {n_jac} (jacfwd)")
@@ -151,7 +172,7 @@ def aggregate(a):
     f = os.path.join(a.results, "jacobian_cost.csv")
     if os.path.exists(f):
         c = pd.read_csv(f, comment="#")
-        for _, r in c.iterrows(): out.append(dict(quantity=r["item"], value=r.median_ms, unit="ratio" if "ratio" in r["item"] else "ms (median)", n=r.n_calls, p99_ms=r.p99_ms))
+        for _, r in c.iterrows(): out.append(dict(quantity=r["item"], value=r.median_ms, unit="ratio" if ("ratio " in r["item"] and "iteration" not in r["item"].split("ratio")[0]) and r["group"] == "summary" and r["item"].replace("legacy: ", "").startswith("ratio") else "ms (median)", n=r.n_calls, p99_ms=r.p99_ms))
     f = os.path.join(a.results, "jacobian_step.csv")
     if os.path.exists(f):
         for _, r in pd.read_csv(f, comment="#").iterrows():
