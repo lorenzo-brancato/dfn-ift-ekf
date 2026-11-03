@@ -149,55 +149,57 @@ def aggregate(args):
         rows.append(row)
     T = pd.DataFrame(rows)
     cli.write_csv(T, args, "tables/tab_charge_m17.csv", note="Tables III and VI: per state, seed and charge pulse (kind 'pulse' = 2C pulses and P6L pulses, 'CC' = 1C charge). phi_pl errors in mV (RMS, signed mean, "
-                  "fraction of samples more than 5 mV above the reference = unsafe side), eta RMS in mV, c_e,min error in %, margins = SPMe/EKF; thr*: detection of phi_pl crossings (delay + late, - early). " + NOTE_TAIL, float_format="%.6g")
+                  "fraction of samples more than 5 mV above the reference = unsafe side), eta RMS in mV, c_e,min error in %, margins = SPMe/EKF; thr*: detection of phi_pl crossings (delay + late, - early). " + NOTE_TAIL, float_format=None)
 
     # ---- the -2C pulses: summary per state and pulse (medians, worst runs), detection and validity of the guard
     P2 = P[P.pulse == "-2C"].copy(); ordn = {th: {pid: k + 1 for k, pid in enumerate(sorted(P2[P2.theta == th].pulse_id.unique()))} for th in P2.theta.unique()}
     P2["pulse_2C"] = [ordn[th][pid] for th, pid in zip(P2.theta, P2.pulse_id)]
-    summ = []
-    for (th, k), g in P2.groupby(["theta", "pulse_2C"]):
-        e = g[g["filter"] == "EKF"]; s = g[g["filter"] == "SPMe"].set_index("seed").loc[e.seed]; e = e.set_index("seed")
-        row = dict(theta=th, pulse_2C=k, runs=len(e), duration_s_median=e.duration_s.median(), phipl_min_ref_mV_median=e.phipl_min_ref_mV.median(), phipl_min_ref_mV_min=e.phipl_min_ref_mV.min())
-        for nm, d in (("EKF", e), ("SPMe", s)):
-            for c in ("E_phipl_rms_mV", "E_eta_rms_mV", "ce_min_relerr_max_pct", "frac_unsafe_gt5mV", "phipl_err_signed_mean_mV", "phipl_min_err_mV"):
-                row[f"{c}_{nm}_median"] = d[c].median(); row[f"{c}_{nm}_max"] = d[c].max()
-        row["margin_phipl_ratio_of_medians"] = row["E_phipl_rms_mV_SPMe_median"] / row["E_phipl_rms_mV_EKF_median"]; row["margin_phipl_run_median"] = (s.E_phipl_rms_mV / e.E_phipl_rms_mV).median()
-        row["margin_eta_ratio_of_medians"] = row["E_eta_rms_mV_SPMe_median"] / row["E_eta_rms_mV_EKF_median"]; row["margin_ce_ratio_of_medians"] = row["ce_min_relerr_max_pct_SPMe_median"] / row["ce_min_relerr_max_pct_EKF_median"]
-        summ.append(row)
-    S = pd.DataFrame(summ)
-    cli.write_csv(S, args, "tables/charge_summary.csv", note="2C charge pulses per state and pulse (1 = first, 2 = second): medians and maxima over the seeds. frac_unsafe = fraction of samples with phi_pl estimate more than 5 mV above "
-                  "the reference. " + NOTE_TAIL, float_format="%.6g")
+    if len(P2) == 0: print('no 2C pulses in these runs (quick run?): 2C summary tables skipped')
+    else:
+        summ = []
+        for (th, k), g in P2.groupby(["theta", "pulse_2C"]):
+            e = g[g["filter"] == "EKF"]; s = g[g["filter"] == "SPMe"].set_index("seed").loc[e.seed]; e = e.set_index("seed")
+            row = dict(theta=th, pulse_2C=k, runs=len(e), duration_s_median=e.duration_s.median(), phipl_min_ref_mV_median=e.phipl_min_ref_mV.median(), phipl_min_ref_mV_min=e.phipl_min_ref_mV.min())
+            for nm, d in (("EKF", e), ("SPMe", s)):
+                for c in ("E_phipl_rms_mV", "E_eta_rms_mV", "ce_min_relerr_max_pct", "frac_unsafe_gt5mV", "phipl_err_signed_mean_mV", "phipl_min_err_mV"):
+                    row[f"{c}_{nm}_median"] = d[c].median(); row[f"{c}_{nm}_max"] = d[c].max()
+            row["margin_phipl_ratio_of_medians"] = row["E_phipl_rms_mV_SPMe_median"] / row["E_phipl_rms_mV_EKF_median"]; row["margin_phipl_run_median"] = (s.E_phipl_rms_mV / e.E_phipl_rms_mV).median()
+            row["margin_eta_ratio_of_medians"] = row["E_eta_rms_mV_SPMe_median"] / row["E_eta_rms_mV_EKF_median"]; row["margin_ce_ratio_of_medians"] = row["ce_min_relerr_max_pct_SPMe_median"] / row["ce_min_relerr_max_pct_EKF_median"]
+            summ.append(row)
+        S = pd.DataFrame(summ)
+        cli.write_csv(S, args, "tables/charge_summary.csv", note="2C charge pulses per state and pulse (1 = first, 2 = second): medians and maxima over the seeds. frac_unsafe = fraction of samples with phi_pl estimate more than 5 mV above "
+                      "the reference. " + NOTE_TAIL, float_format="%.6g")
 
-    tn = []
-    def add(q, state, pulse, stat, v, doc): tn.append(dict(quantity=q, state=state, pulse_2C=pulse, stat=stat, value=v, description=doc))
-    for _, r_ in S.iterrows():
-        th, k = r_.theta, int(r_.pulse_2C)
-        add("frac_unsafe_gt5mV_SPMe", th, k, "median", r_.frac_unsafe_gt5mV_SPMe_median, "fraction of samples with SPMe phi_pl more than 5 mV above the reference, median over seeds")
-        add("frac_unsafe_gt5mV_SPMe", th, k, "max", r_.frac_unsafe_gt5mV_SPMe_max, "same, worst run")
-        add("E_phipl_rms_mV_EKF", th, k, "max", r_.E_phipl_rms_mV_EKF_max, "grey-box phi_pl RMS error (mV), worst run")
-        add("phipl_min_ref_mV", th, k, "median", r_.phipl_min_ref_mV_median, "minimum of the reference phi_pl during the pulse (mV)")
-    for th, g in S.groupby("theta"):
-        add("frac_unsafe_gt5mV_SPMe", th, "any", "max", g.frac_unsafe_gt5mV_SPMe_max.max(), "worst run over both pulses")
-        add("E_phipl_rms_mV_EKF", th, "any", "max", g.E_phipl_rms_mV_EKF_max.max(), "worst run over both pulses (mV)")
-        add("phipl_min_ref_mV", th, "any", "min", g.phipl_min_ref_mV_min.min(), "lowest reference phi_pl over both pulses and seeds (mV)")
-    add("E_phipl_rms_mV_EKF", "all", "any", "max_of_medians", S.E_phipl_rms_mV_EKF_median.max(), "largest per-pulse median grey-box phi_pl RMS (abstract: 0.6 mV)")
-    add("E_phipl_rms_mV_EKF", "all", "any", "max", S.E_phipl_rms_mV_EKF_max.max(), "worst single run (mV)")
-    add("E_phipl_rms_mV_SPMe", "all", "any", "max_of_medians", S.E_phipl_rms_mV_SPMe_median.max(), "largest per-pulse median SPMe phi_pl RMS (abstract: 23.8 mV)")
-    add("frac_unsafe_gt5mV_SPMe", "all", "any", "max", S.frac_unsafe_gt5mV_SPMe_max.max(), "worst single run over states and pulses")
-    add("margin_phipl_ratio_of_medians", "all", "any", "min", S.margin_phipl_ratio_of_medians.min(), "smallest SPMe/EKF margin over states and pulses")
-    add("margin_phipl_ratio_of_medians", "all", "any", "max", S.margin_phipl_ratio_of_medians.max(), "largest SPMe/EKF margin over states and pulses")
-    pe = P2[P2["filter"] == "EKF"]; dly = (pe.thr0_t_ref_s - pe.t_start_s).dropna()
-    add("ref_phipl_zero_crossing_after_pulse_start_s", "all", "any", "max", dly.max(), "time from the pulse start to the first reference sample with phi_pl < 0 (s), all 2C pulses with a crossing")
-    pd.DataFrame(tn).pipe(lambda d: cli.write_csv(d, args, "tables/charge_text_numbers.csv", note="numbers quoted in the text of Sec. IV-C that were previously computed by hand; 2C pulses of " + NOTE_TAIL, float_format="%.6g"))
+        tn = []
+        def add(q, state, pulse, stat, v, doc): tn.append(dict(quantity=q, state=state, pulse_2C=pulse, stat=stat, value=v, description=doc))
+        for _, r_ in S.iterrows():
+            th, k = r_.theta, int(r_.pulse_2C)
+            add("frac_unsafe_gt5mV_SPMe", th, k, "median", r_.frac_unsafe_gt5mV_SPMe_median, "fraction of samples with SPMe phi_pl more than 5 mV above the reference, median over seeds")
+            add("frac_unsafe_gt5mV_SPMe", th, k, "max", r_.frac_unsafe_gt5mV_SPMe_max, "same, worst run")
+            add("E_phipl_rms_mV_EKF", th, k, "max", r_.E_phipl_rms_mV_EKF_max, "grey-box phi_pl RMS error (mV), worst run")
+            add("phipl_min_ref_mV", th, k, "median", r_.phipl_min_ref_mV_median, "minimum of the reference phi_pl during the pulse (mV)")
+        for th, g in S.groupby("theta"):
+            add("frac_unsafe_gt5mV_SPMe", th, "any", "max", g.frac_unsafe_gt5mV_SPMe_max.max(), "worst run over both pulses")
+            add("E_phipl_rms_mV_EKF", th, "any", "max", g.E_phipl_rms_mV_EKF_max.max(), "worst run over both pulses (mV)")
+            add("phipl_min_ref_mV", th, "any", "min", g.phipl_min_ref_mV_min.min(), "lowest reference phi_pl over both pulses and seeds (mV)")
+        add("E_phipl_rms_mV_EKF", "all", "any", "max_of_medians", S.E_phipl_rms_mV_EKF_median.max(), "largest per-pulse median grey-box phi_pl RMS (abstract: 0.6 mV)")
+        add("E_phipl_rms_mV_EKF", "all", "any", "max", S.E_phipl_rms_mV_EKF_max.max(), "worst single run (mV)")
+        add("E_phipl_rms_mV_SPMe", "all", "any", "max_of_medians", S.E_phipl_rms_mV_SPMe_median.max(), "largest per-pulse median SPMe phi_pl RMS (abstract: 23.8 mV)")
+        add("frac_unsafe_gt5mV_SPMe", "all", "any", "max", S.frac_unsafe_gt5mV_SPMe_max.max(), "worst single run over states and pulses")
+        add("margin_phipl_ratio_of_medians", "all", "any", "min", S.margin_phipl_ratio_of_medians.min(), "smallest SPMe/EKF margin over states and pulses")
+        add("margin_phipl_ratio_of_medians", "all", "any", "max", S.margin_phipl_ratio_of_medians.max(), "largest SPMe/EKF margin over states and pulses")
+        pe = P2[P2["filter"] == "EKF"]; dly = (pe.thr0_t_ref_s - pe.t_start_s).dropna()
+        add("ref_phipl_zero_crossing_after_pulse_start_s", "all", "any", "max", dly.max(), "time from the pulse start to the first reference sample with phi_pl < 0 (s), all 2C pulses with a crossing")
+        pd.DataFrame(tn).pipe(lambda d: cli.write_csv(d, args, "tables/charge_text_numbers.csv", note="numbers quoted in the text of Sec. IV-C that were previously computed by hand; 2C pulses of " + NOTE_TAIL, float_format="%.6g"))
 
-    det = []
-    for thr in THRS:
-        for (th, f), g in P2.groupby(["theta", "filter"]):
-            rc = g[f"thr{thr}_ref_crossed"].astype(bool); dt_ = g[f"thr{thr}_est_crossed"].astype(bool)
-            det.append(dict(threshold_mV=thr, theta=th, filter=f, pulses=len(g), ref_crossed=int(rc.sum()), detected=int((rc & dt_).sum()), missed=int(g[f"thr{thr}_missed"].astype(bool).sum()),
-                            false_alarms=int(g[f"thr{thr}_false_alarm"].astype(bool).sum()), delay_median_s=float(g[f"thr{thr}_delay_s"].median()), delay_min_s=float(g[f"thr{thr}_delay_s"].min()),
-                            delay_max_s=float(g[f"thr{thr}_delay_s"].max()), t_ref_median_s=float(g[f"thr{thr}_t_ref_s"].median())))
-    cli.write_csv(pd.DataFrame(det), args, "tables/charge_detection.csv", note="Appendix D: threshold detection on the 2C pulses (both pulses of all seeds); delay + late, - early. " + NOTE_TAIL, float_format="%.6g")
+        det = []
+        for thr in THRS:
+            for (th, f), g in P2.groupby(["theta", "filter"]):
+                rc = g[f"thr{thr}_ref_crossed"].astype(bool); dt_ = g[f"thr{thr}_est_crossed"].astype(bool)
+                det.append(dict(threshold_mV=thr, theta=th, filter=f, pulses=len(g), ref_crossed=int(rc.sum()), detected=int((rc & dt_).sum()), missed=int(g[f"thr{thr}_missed"].astype(bool).sum()),
+                                false_alarms=int(g[f"thr{thr}_false_alarm"].astype(bool).sum()), delay_median_s=float(g[f"thr{thr}_delay_s"].median()), delay_min_s=float(g[f"thr{thr}_delay_s"].min()),
+                                delay_max_s=float(g[f"thr{thr}_delay_s"].max()), t_ref_median_s=float(g[f"thr{thr}_t_ref_s"].median())))
+        cli.write_csv(pd.DataFrame(det), args, "tables/charge_detection.csv", note="Appendix D: threshold detection on the 2C pulses (both pulses of all seeds); delay + late, - early. " + NOTE_TAIL, float_format="%.6g")
     V = info.groupby("theta").agg(runs=("seed", "count"), finite_all=("finite", "all"), rejected_total=("rejected_n", "sum"), rejected_frac_max=("rejected_frac", "max"), F_newton_max_accepted=("F_newton_max_accepted", "max"),
                                   max_abs_eta_V=("max_abs_eta_V", "max"), csn_ref_max=("csn_max_ref_over_cmax", "max"), csn_est_max=("csn_max_est_over_cmax", "max"), Rf_err_end_max=("Rf_err_end_pct", "max"),
                                   Ds_err_end_max=("Ds_err_end_pct", "max")).reset_index()
