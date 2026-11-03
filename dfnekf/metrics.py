@@ -1,9 +1,15 @@
-"""M5: charge-pulse metrics (definitions of BRIEF_M5_charge.md section 1; same node and phi_pl / eta definitions as M3-C)."""
+"""Pulse metrics for the charge and discharge experiments: current pulses and rest windows, errors of the plating potential phi_pl and of the reaction
+overpotential eta, and threshold-crossing detection.
+
+phi_pl and eta are evaluated at the anode/separator face, linearly extrapolated from the last two anode cells (``step.DFN.interface`` for the filter,
+``step.interface_ref`` for the PyBaMM reference); they are not the values of the single cell next to the separator.
+Sign convention: positive current = discharge, so charge pulses have I < 0; 1C = 5 A.
+"""
 import numpy as np
 
 
 def pulses(I, thr=4.9, cc_s=100.0, dt=0.5):
-    """Contiguous runs with I <= -thr. Returns list of dict(label, kind, a, b): label '-<n>C' by the minimum current (1C = 5 A), kind 'pulse' or 'CC' (duration > cc_s), index range [a, b)."""
+    """Contiguous runs with I <= -thr (charge). Returns a list of dict(label, kind, a, b): label '-<n>C' from the minimum current (1C = 5 A), kind 'pulse' or 'CC' (duration > cc_s seconds), sample range [a, b)."""
     m = np.asarray(I) <= -thr; out = []; i = 0; n = len(m)
     while i < n:
         if m[i]:
@@ -16,14 +22,15 @@ def pulses(I, thr=4.9, cc_s=100.0, dt=0.5):
 
 
 def windows(I, p, rest_s=90.0, dt=0.5):
-    """pulse window and the rest window (contiguous I = 0 samples after the pulse, up to rest_s)."""
+    """[('pulse', a, b), ('rest90', b, k)]: the pulse window and the rest window (contiguous I = 0 samples after the pulse, up to rest_s seconds)."""
     a, b = p["a"], p["b"]; k = b; nmax = int(rest_s / dt)
     while k < len(I) and k - b < nmax and abs(I[k]) < 1e-9: k += 1
     return [("pulse", a, b), ("rest90", b, k)]
 
 
 def metrics(ref_eta, ref_ppl, ref_ce, est_eta, est_ppl, est_ce, a, b):
-    """errors in mV (eta, phi_pl), ce_min in %; signed phi_pl error mean(est - ref); fraction of samples with est - ref > +5 mV (unsafe side); error on the minimum of phi_pl."""
+    """Errors on the sample window [a, b): RMS and maximum of the phi_pl error (mV), signed mean of est - ref, fraction of samples with est - ref > +5 mV (unsafe side:
+the estimate is above the reference, so plating is under-predicted), minimum of the reference phi_pl and error on that minimum, RMS eta error (mV), maximum relative c_e,min error (%)."""
     if b <= a: return {}
     sl = slice(a, b); e_pl = 1e3 * (est_ppl[sl] - ref_ppl[sl]); e_eta = 1e3 * (est_eta[sl] - ref_eta[sl]); ec = 100 * np.abs(est_ce[sl] - ref_ce[sl]) / ref_ce[sl]
     return dict(n=b - a, E_phipl_rms_mV=float(np.sqrt(np.mean(e_pl ** 2))), E_phipl_max_mV=float(np.abs(e_pl).max()), phipl_err_signed_mean_mV=float(e_pl.mean()), frac_unsafe_gt5mV=float(np.mean(e_pl > 5.0)), phipl_min_ref_mV=float(1e3 * ref_ppl[sl].min()),
