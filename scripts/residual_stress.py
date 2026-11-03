@@ -91,7 +91,7 @@ def main():
             ("residual of the network alone: maximum", float(res_net.max()), "the network alone returns a wrong current without warning"),
             ("residual of the network alone: median", float(np.median(res_net)), ""),
             ("residual of the converged solver: maximum", float(res_conv.max()), "below 1e-10 with the converged solver"), ("minimum c_e (mol/m3)", float(cemin.min()), "")]
-    N = pd.DataFrame(nums, columns=["quantity", "value", "quoted_as"]); os.makedirs(os.path.join(a.results, "tables"), exist_ok=True)
+    N = pd.DataFrame(nums, columns=["quantity", "value", "first_version_text"]); os.makedirs(os.path.join(a.results, "tables"), exist_ok=True)
     cli.write_csv(N, a, "tables/residual_stress_numbers.csv", note="numbers of the residual certificate in the stress case (Fig. 11)", float_format="%.6g")
     print(N.to_string(index=False)); clock.log()
 

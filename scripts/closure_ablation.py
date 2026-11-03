@@ -236,7 +236,7 @@ def aggregate(args):
     def mean(cl, col): g = D[D.closure == cl]; return float(g[col].mean()) if len(g) else np.nan
     def mx(cl, col): g = D[D.closure == cl]; return float(g[col].max()) if len(g) else np.nan
     tn = []
-    def add(name, value, text): tn.append(dict(quantity=name, value=value, quoted_as=text))
+    def add(name, value, text): tn.append(dict(quantity=name, value=value, first_version_text=text))
     add("dV_rms_net0_vs_warm_mV (mean over seeds)", mean("net0", "dV_rms_vs_warm_mV"), "0.53 mV (Step 1, Table VIII)")
     add("dV_rms_net1c_vs_warm_mV", mean("net1c", "dV_rms_vs_warm_mV"), "0.004 mV (Step 2, Table VIII)")
     add("dV_rms_net1_vs_warm_mV", mean("net1", "dV_rms_vs_warm_mV"), "row 'net1' (completion of the linearization only)")
