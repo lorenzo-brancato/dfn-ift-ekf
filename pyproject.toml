@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dfnekf"
+version = "0.8.0"
+description = "Extended Kalman filtering on the full Doyle-Fuller-Newman model via the implicit function theorem"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11,<3.12"
+authors = [{ name = "Lorenzo Brancato" }, { name = "Alexander Harej" }, { name = "Marco Giglio" }, { name = "Francesco Cadini" }]
+# versions used for the manuscript (Python 3.11.15)
+dependencies = [
+    "jax==0.10.2",
+    "jaxlib==0.10.2",
+    "numpy==2.4.6",
+    "scipy==1.17.1",
+    "pandas==3.0.6",
+    "optax==0.2.8",
+    "pybamm==26.9.0.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+plots = ["matplotlib==3.11.2"]
+
+[tool.setuptools]
+packages = ["dfnekf"]
+
+[tool.setuptools.package-data]
+dfnekf = ["assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

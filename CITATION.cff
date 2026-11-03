@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the manuscript below."
+title: "dfn-ift-ekf: code for Extended Kalman Filtering on the Full Doyle-Fuller-Newman Model via the Implicit Function Theorem"
+type: software
+license: MIT
+authors:
+  - family-names: Brancato
+    given-names: Lorenzo
+    affiliation: "Dipartimento di Meccanica, Politecnico di Milano"
+  - family-names: Harej
+    given-names: Alexander
+    affiliation: "Dipartimento di Meccanica, Politecnico di Milano"
+  - family-names: Giglio
+    given-names: Marco
+    affiliation: "Dipartimento di Meccanica, Politecnico di Milano"
+  - family-names: Cadini
+    given-names: Francesco
+    affiliation: "Dipartimento di Meccanica, Politecnico di Milano"
+preferred-citation:
+  type: article
+  title: "Extended Kalman Filtering on the Full Doyle–Fuller–Newman Model via the Implicit Function Theorem: Plating-Potential Estimation and Ageing Tracking"
+  authors:
+    - family-names: Brancato
+      given-names: Lorenzo
+    - family-names: Harej
+      given-names: Alexander
+    - family-names: Giglio
+      given-names: Marco
+    - family-names: Cadini
+      given-names: Francesco
+  journal: "IEEE Transactions on Control Systems Technology"
+  notes: "Manuscript v0.8, under review."

@@ -6,13 +6,13 @@ import os
 import numpy as np
 
 
-def path(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data"):
-    ms = "-".join(str(m) for m in mesh)
+def path(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data", grid_ratio=None):
+    ms = "-".join(str(m) for m in mesh) + (f"nu{grid_ratio:g}" if grid_ratio else "")
     return f"{data_dir}/ref_{proto}_{tag}_m{ms}" + ("" if period == 1.0 else f"_dt{period:g}") + ".npz"
 
 
-def load(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data"):
-    d = np.load(path(proto, tag, mesh, period, data_dir))
+def load(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data", grid_ratio=None):
+    d = np.load(path(proto, tag, mesh, period, data_dir, grid_ratio))
     t = d["t"]; n = int(round(t[-1] / period))
     tk = np.arange(n) * period
     idx = np.array([np.where(np.isclose(t, x, atol=1e-9))[0][-1] for x in tk])
