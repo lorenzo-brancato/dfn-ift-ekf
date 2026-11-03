@@ -1,0 +1,53 @@
+% Static tests. Row 1: Monte Carlo estimates against the truth (data/mc_th*.csv). Row 2: error budget per state
+% (data/mc_budget.csv: RMSE over 10 runs, |model bias|, Cramer-Rao bound; % of range).
+\pgfplotsset{discard if not/.style 2 args={x filter/.append code={\edef\tempa{\thisrow{#1}}\edef\tempb{#2}\ifx\tempa\tempb\else\def\pgfmathresult{inf}\fi}}}
+\pgfplotsset{mcth1/.style={only marks, mark=o, mark size=1.7pt, cOra, line width=0.5pt},
+  mcth2/.style={only marks, mark=square, mark size=1.5pt, cSPMe, line width=0.5pt},
+  mcth3/.style={only marks, mark=triangle, mark size=2pt, cGre, line width=0.5pt},
+  mcth4/.style={only marks, mark=diamond, mark size=2pt, cPur, line width=0.5pt},
+  mcth5/.style={only marks, mark=pentagon, mark size=1.8pt, cBlu, line width=0.5pt}}
+\begin{tikzpicture}
+\begin{groupplot}[paper, group style={group size=3 by 2, horizontal sep=13mm, vertical sep=11mm, group name=g}, width=40mm, height=25mm]
+\nextgroupplot[xmin=0, xmax=11, ymin=0, ymax=11, xtick={0,5,10}, ytick={0,5,10},
+  xlabel={true $R_{\mathrm{f}}$}, ylabel={estimated $R_{\mathrm{f}}$},
+  legend style={at={(0.02,0.98)}, anchor=north west}]
+\draw[cGrey, line width=0.3pt] (axis cs:0,0) -- (axis cs:11,11);
+\addplot[mcth1] table[x=a_Rf_true_over_Rf0, y=a_Rf_estimated_over_Rf0, col sep=comma] {figures/data/mc_th1.csv};
+\addplot[mcth2] table[x=a_Rf_true_over_Rf0, y=a_Rf_estimated_over_Rf0, col sep=comma] {figures/data/mc_th2.csv};
+\addplot[mcth3] table[x=a_Rf_true_over_Rf0, y=a_Rf_estimated_over_Rf0, col sep=comma] {figures/data/mc_th3.csv};
+\addplot[mcth4] table[x=a_Rf_true_over_Rf0, y=a_Rf_estimated_over_Rf0, col sep=comma] {figures/data/mc_th4.csv};
+\addplot[mcth5] table[x=a_Rf_true_over_Rf0, y=a_Rf_estimated_over_Rf0, col sep=comma] {figures/data/mc_th5.csv};
+\legend{th1, th2, th3, th4, th5}
+\nextgroupplot[xmin=-0.02, xmax=0.32, ymin=-0.02, ymax=0.32, xtick={0,0.1,0.2,0.3}, ytick={0,0.1,0.2,0.3},
+  xticklabel style={/pgf/number format/fixed}, yticklabel style={/pgf/number format/fixed},
+  xlabel={true LAM}, ylabel={estimated LAM}]
+\draw[cGrey, line width=0.3pt] (axis cs:-0.02,-0.02) -- (axis cs:0.32,0.32);
+\addplot[mcth1] table[x=b_LAM_true, y=b_LAM_estimated, col sep=comma] {figures/data/mc_th1.csv};
+\addplot[mcth2] table[x=b_LAM_true, y=b_LAM_estimated, col sep=comma] {figures/data/mc_th2.csv};
+\addplot[mcth3] table[x=b_LAM_true, y=b_LAM_estimated, col sep=comma] {figures/data/mc_th3.csv};
+\addplot[mcth4] table[x=b_LAM_true, y=b_LAM_estimated, col sep=comma] {figures/data/mc_th4.csv};
+\addplot[mcth5] table[x=b_LAM_true, y=b_LAM_estimated, col sep=comma] {figures/data/mc_th5.csv};
+\nextgroupplot[xmin=0.2, xmax=1.1, ymin=0.2, ymax=1.1, xtick={0.2,0.6,1}, ytick={0.2,0.6,1},
+  xticklabel style={/pgf/number format/fixed}, yticklabel style={/pgf/number format/fixed},
+  xlabel={true $D_{\mathrm{s}}$}, ylabel={estimated $D_{\mathrm{s}}$}]
+\draw[cGrey, line width=0.3pt] (axis cs:0.2,0.2) -- (axis cs:1.1,1.1);
+\addplot[mcth1] table[x=c_Ds_true_over_Ds0, y=c_Ds_estimated_over_Ds0, col sep=comma] {figures/data/mc_th1.csv};
+\addplot[mcth2] table[x=c_Ds_true_over_Ds0, y=c_Ds_estimated_over_Ds0, col sep=comma] {figures/data/mc_th2.csv};
+\addplot[mcth3] table[x=c_Ds_true_over_Ds0, y=c_Ds_estimated_over_Ds0, col sep=comma] {figures/data/mc_th3.csv};
+\addplot[mcth4] table[x=c_Ds_true_over_Ds0, y=c_Ds_estimated_over_Ds0, col sep=comma] {figures/data/mc_th4.csv};
+\addplot[mcth5] table[x=c_Ds_true_over_Ds0, y=c_Ds_estimated_over_Ds0, col sep=comma] {figures/data/mc_th5.csv};
+\nextgroupplot[height=14mm, xmin=-0.6, xmax=4.6, ymin=0, ymax=1.5, ytick={0,0.5,1}, xtick={0,1,2,3,4}, xticklabels={th1,th2,th3,th4,th5}, /pgf/bar width=3.6pt, ylabel={\% of range}]
+\addplot[ybar, bar shift=-4pt, fill=cBlu, draw=none, discard if not={param}{Rf}] table[x=x, y=rmse, col sep=comma] {figures/data/mc_budget.csv};
+\addplot[ybar, bar shift=0pt, fill=cOra, draw=none, postaction={pattern=north east lines, pattern color=white}, discard if not={param}{Rf}] table[x=x, y=abs_bias, col sep=comma] {figures/data/mc_budget.csv};
+\addplot[ybar, bar shift=4pt, fill=cGrey!70, draw=none, discard if not={param}{Rf}] table[x=x, y=crlb, col sep=comma] {figures/data/mc_budget.csv};
+\nextgroupplot[height=14mm, xmin=-0.6, xmax=4.6, ymin=0, ymax=0.6, ytick={0,0.2,0.4}, xtick={0,1,2,3,4}, xticklabels={th1,th2,th3,th4,th5}, /pgf/bar width=3.6pt]
+\addplot[ybar, bar shift=-4pt, fill=cBlu, draw=none, discard if not={param}{LAM}] table[x=x, y=rmse, col sep=comma] {figures/data/mc_budget.csv};
+\addplot[ybar, bar shift=0pt, fill=cOra, draw=none, postaction={pattern=north east lines, pattern color=white}, discard if not={param}{LAM}] table[x=x, y=abs_bias, col sep=comma] {figures/data/mc_budget.csv};
+\addplot[ybar, bar shift=4pt, fill=cGrey!70, draw=none, discard if not={param}{LAM}] table[x=x, y=crlb, col sep=comma] {figures/data/mc_budget.csv};
+\nextgroupplot[height=14mm, xmin=-0.6, xmax=4.6, ymin=0, ymax=3, ytick={0,1,2,3}, xtick={0,1,2,3,4}, xticklabels={th1,th2,th3,th4,th5}, /pgf/bar width=3.6pt]
+\addplot[ybar, bar shift=-4pt, fill=cBlu, draw=none, discard if not={param}{Ds}] table[x=x, y=rmse, col sep=comma] {figures/data/mc_budget.csv};
+\addplot[ybar, bar shift=0pt, fill=cOra, draw=none, postaction={pattern=north east lines, pattern color=white}, discard if not={param}{Ds}] table[x=x, y=abs_bias, col sep=comma] {figures/data/mc_budget.csv};
+\addplot[ybar, bar shift=4pt, fill=cGrey!70, draw=none, discard if not={param}{Ds}] table[x=x, y=crlb, col sep=comma] {figures/data/mc_budget.csv};
+\end{groupplot}
+\plab{g c1r1}{a}\plab{g c2r1}{b}\plab{g c3r1}{c}\plab{g c1r2}{d}\plab{g c2r2}{e}\plab{g c3r2}{f}
+\end{tikzpicture}

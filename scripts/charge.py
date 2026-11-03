@@ -186,9 +186,8 @@ def aggregate(args):
     add("frac_unsafe_gt5mV_SPMe", "all", "any", "max", S.frac_unsafe_gt5mV_SPMe_max.max(), "worst single run over states and pulses")
     add("margin_phipl_ratio_of_medians", "all", "any", "min", S.margin_phipl_ratio_of_medians.min(), "smallest SPMe/EKF margin over states and pulses")
     add("margin_phipl_ratio_of_medians", "all", "any", "max", S.margin_phipl_ratio_of_medians.max(), "largest SPMe/EKF margin over states and pulses")
-    for f in ("EKF", "SPMe"):
-        dly = (P2[P2["filter"] == f].thr0_t_ref_s - P2[P2["filter"] == f].t_start_s).dropna()
-        add("ref_phipl_zero_crossing_after_pulse_start_s", "all", "any", "max", dly.max(), "time from the pulse start to the first reference sample with phi_pl < 0 (s), all 2C pulses with a crossing"); break
+    pe = P2[P2["filter"] == "EKF"]; dly = (pe.thr0_t_ref_s - pe.t_start_s).dropna()
+    add("ref_phipl_zero_crossing_after_pulse_start_s", "all", "any", "max", dly.max(), "time from the pulse start to the first reference sample with phi_pl < 0 (s), all 2C pulses with a crossing")
     pd.DataFrame(tn).pipe(lambda d: cli.write_csv(d, args, "tables/charge_text_numbers.csv", note="numbers quoted in the text of Sec. IV-C that were previously computed by hand; 2C pulses of " + NOTE_TAIL, float_format="%.6g"))
 
     det = []
@@ -257,7 +256,7 @@ def aggregate(args):
                                        phi_pl_UKF_SPMe_mV=1e3 * d["spme_ppl"][idx])))
     if parts:
         cli.write_csv(pd.concat(parts), args, "source_data/fig_charge_cc.csv", note="Fig. 7d-f: phi_pl during the 1C constant-current charge of F6Q (1272 s; 372 s for th3), seed 0; reference phi_pl at the anode/separator face "
-                      "(extrapolated from the last two anode cells), every 2nd sample (1 s), from 30 s before to 60 s after the charge. " + NOTE_TAIL, float_format="%.17g")
+                      "(extrapolated from the last two anode cells), every 2nd sample (1 s), from 30 s before to 60 s after the charge. " + NOTE_TAIL, float_format=None)
     print("aggregate written to", args.results)
 
 

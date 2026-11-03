@@ -11,7 +11,7 @@ The model uses the grid given by --grid (the paper's values are on 4:1, 20/10/20
 Per-run output (one file per protocol and state, so the states can be run in separate processes):
   <results>/crlb_<protocol>_<state>.csv       rows (version x parameter), columns as the earlier table tab_crlb_m17.csv
   <results>/traj/crlb_dV_<protocol>_<state>.npz   sensitivity matrix dV/d(Rf, LAM, LLI, Ds, dc_n0, dc_p0) [n_samples, 6]
---aggregate writes <results>/tables/tab_crlb_m17.csv, <results>/tables/tab_crlb_soc_m17.csv and <results>/source_data/fig_crlb_m17.csv.
+--aggregate writes <results>/tables/crlb_4par.csv (4-parameter table, versions known_state, unknown_soc), crlb_conditional.csv, tab_crlb_soc_m17.csv and <results>/source_data/fig_crlb_m17.csv.
 
 Commands (about 15 s per state and protocol on one core):
   python scripts/crlb.py --grid 4:1 --states th1,th2,th3,th4,th5 --protocols P6Lx2 --data data --results results
@@ -79,7 +79,13 @@ def aggregate(a):
             "conditional_on_LLI (bound of R_f, LAM, D_s with LLI fixed = Schur complement; the grey bars of Fig. 5), unknown_soc (dc_n0, dc_p0 extra, LLI removed), known_state+k0")
     t = os.path.join(a.results, "tables"); s = os.path.join(a.results, "source_data")
     a2 = type("A", (), dict(item=a.item, grid=a.grid, results=t))()
-    cli.write_csv(d, a2, "tab_crlb_m17.csv", note=note, float_format="%.8g")
+    cli.write_csv(d[d.version != "conditional_on_LLI"], a2, "crlb_4par.csv", note=note, float_format="%.8g")      # format of the earlier tab_crlb_m17.csv; versions known_state, unknown_soc, known_state+k0
+    cond = []                                                                                                    # bound conditional on LLI next to the marginal and the unknown-SOC variant (independent of make_figdata)
+    for (proto, tag), gg in d.groupby(["protocol", "theta_tag"], sort=False):
+        for par, nm in (("R_f", "Rf"), ("LAM_n", "LAM"), ("D_s", "Ds")):
+            get = lambda v: float(gg[(gg.version == v) & (gg.parameter == par)].sd_pct_range.iloc[0]) if len(gg[(gg.version == v) & (gg.parameter == par)]) else float("nan")
+            cond.append(dict(protocol=proto, theta=tag, param=nm, sd_pct_range=get("conditional_on_LLI"), sd_pct_range_marginal_4par=get("known_state"), sd_pct_range_unknown_soc=get("unknown_soc")))
+    cli.write_csv(pd.DataFrame(cond), a2, "crlb_conditional.csv", note="sd_pct_range = bound of (R_f, LAM, D_s) conditional on LLI (Schur complement), percent of range", float_format="%.6g")
     soc = crlb.soc_effect(d.to_dict("records")); cli.write_csv(soc, a2, "tab_crlb_soc_m17.csv", note="effect of the unknown initial SOC on the bound of (R_f, LAM_n, D_s), percent of range", float_format="%.6g")
     # source data of the grey bars: P6Lx2, one row per state and parameter
     g = d[d.protocol == "P6Lx2"]; rows = []

@@ -1,0 +1,496 @@
+% ------------------------------------------------------------------
+% Draft v0.8, 3 November 2026 -- IEEE Transactions on Control Systems Technology (regular paper).
+% IEEEtran journal, two columns. All figures are pgfplots/TikZ (figures/*.tex) with data in figures/data/*.csv.
+% Compile with pdfLaTeX (two passes; the bibliography is inline).
+% ------------------------------------------------------------------
+\documentclass[journal]{IEEEtran}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{xcolor}
+\usepackage{pgfplots}
+\input{figures/style.tex}
+\usepackage[hidelinks]{hyperref}
+\sisetup{group-separator={},detect-all}
+
+\newcommand{\vz}{\bm{z}}\newcommand{\vj}{\bm{j}}\newcommand{\vy}{\bm{y}}\newcommand{\vw}{\bm{w}}
+\newcommand{\vth}{\bm{\theta}}\newcommand{\vF}{\bm{F}}\newcommand{\mA}{\bm{A}}\newcommand{\mB}{\bm{B}}
+\newcommand{\mC}{\bm{C}}\newcommand{\mP}{\bm{P}}\newcommand{\mLam}{\bm{\Lambda}}\newcommand{\dd}{\mathrm{d}}
+\newcommand{\ce}{c_{\mathrm{e}}}\newcommand{\Ds}{D_{\mathrm{s}}}\newcommand{\Rf}{R_{\mathrm{f}}}
+\newcommand{\LAM}{\mathrm{LAM}}\newcommand{\LLI}{\mathrm{LLI}}\newcommand{\phipl}{\phi_{\mathrm{pl}}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\todo}[1]{\textcolor{red!70!black}{[#1]}}
+
+\renewcommand{\dbltopfraction}{0.85}\setcounter{dbltopnumber}{3}
+\begin{document}
+
+\title{Extended Kalman Filtering on the Full Doyle--Fuller--Newman Model via the Implicit Function Theorem: Plating-Potential Estimation and Ageing Tracking}
+
+\author{Lorenzo~Brancato, Alexander~Harej, Marco~Giglio, and Francesco~Cadini\thanks{L. Brancato, A. Harej, M. Giglio and F. Cadini are with the Dipartimento di Meccanica, Politecnico di Milano, 20156 Milan, Italy (corresponding author: F. Cadini, e-mail: francesco.cadini@polimi.it).}\thanks{Working draft v0.8, 3 November 2026.}}
+
+\markboth{IEEE Transactions on Control Systems Technology --- draft}{Brancato \emph{et al.}: Extended Kalman filtering on the full DFN model}
+
+\maketitle
+
+\begin{abstract}
+A battery management system must charge lithium-ion cells fast without plating lithium and know how far each cell has aged, yet it measures only current, voltage and temperature. Full-order electrochemical models describe the internal potentials that decide plating, but are rarely used online, because an extended Kalman filter needs the derivative of every model step and the model hides an iterative solver. We split the Doyle--Fuller--Newman model into a linear part, diffusion in particles and electrolyte, which we integrate exactly, and a small nonlinear part, the reaction kinetics, which Newton's method solves. The implicit function theorem then gives the exact step derivative almost for free. The resulting filter, with 653 states, takes 7.9 ms per step, 36 times less than an unscented filter on the same model and code. Against an independent high-resolution simulation, it tracks the plating potential at the separator within 0.6 mV during 2C charge pulses, where a filter on the single particle model with electrolyte errs by up to 23.8 mV, and detects the onset of plating conditions during a 1C charge within seconds, not minutes. It estimates three ageing parameters within 1.1\% of their range for aged cells and, in a 294-hour simulated ageing run, tracks resistance growth and the losses of active material and lithium for 178 hours when read before the constant-voltage phase; near full charge, a sub-millivolt model error is mistaken for ageing. A test design that separates identifiability, model bias and filter consistency traces most remaining errors to their cause.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Battery management systems, electrochemical models, extended Kalman filter, lithium plating, parameter estimation, state estimation.
+\end{IEEEkeywords}
+
+% ===================================================================
+\section{Introduction}
+\IEEEPARstart{A}{} battery management system (BMS) supervises every lithium-ion cell in a vehicle or a grid battery, but it sees each cell only from the outside: the current through it, the voltage across it and, usually, its surface temperature. What limits safe and long operation happens inside (Fig.~\ref{fig:cell}). During fast charging, lithium can deposit as metal on the negative electrode instead of entering its particles; this \emph{plating} is possible wherever the local potential of the solid against the electrolyte, the plating potential $\phipl$, falls below zero\cite{arora1999,waldmann2018}, and it happens first next to the separator. Ageing, in turn, is the slow drift of a few internal properties: the resistance of the surface film (the solid-electrolyte interphase, SEI), the fraction of active material still in use, the amount of cyclable lithium, and how fast lithium diffuses in the particles\cite{birkl2017}; models of these mechanisms are reviewed in\cite{reniers2019,okane2022}. A BMS that could estimate these quantities from voltage alone could charge faster without plating and know how far each cell has aged.
+
+\begin{figure}[t]
+\centering
+\input{figures/fig_cell.tex}
+\caption{What the filter estimates, in a cross-section of the cell (top) and a magnified graphite particle next to the separator (bottom). During charge, lithium ions cross the separator and enter the graphite particles, where lithium diffuses inward (diffusivity $\Ds$). Each particle is coated by the SEI film, whose resistance grows with ageing ($\Rf$) and which traps cyclable lithium ($\LLI$); cracked particles that lose contact no longer store lithium ($\LAM$). Where the plating potential $\phipl$ falls below zero, first next to the separator, lithium can deposit as metal on the particle surface. None of these quantities is measured: the BMS sees only current, voltage and temperature at the terminals.}
+\label{fig:cell}
+\end{figure}
+
+Estimating them requires a model that contains them. The Doyle--Fuller--Newman (DFN) model\cite{doyle1993,ramadesigan2012,brosaplanella2022} describes the cell as two porous electrodes and a separator soaked in electrolyte, with spherical particles in which lithium diffuses; it resolves how the reaction current distributes across the electrode thickness and therefore where the plating potential is lowest. Reduced models, chief among them the single particle model with electrolyte (SPMe)\cite{marquis2019}, keep one particle per electrode and assume a uniform reaction current. They are the practical choice for estimation\cite{moura2017}, but the assumption fails at high current, precisely where plating matters: the RMS voltage error against the DFN grows from \SI{3}{\milli\volt} at 1C to \SI{13}{\milli\volt} at 3C\cite{marquis2019}, and internal quantities, which depend on the current distribution directly, err more.
+
+Model-based estimation for battery management is surveyed in\cite{chaturvedi2010}. Kalman filters have been built on the single particle model\cite{santhanagopalan2006}, also to track the loss of active material\cite{rahimian2012}; on reduced electrochemical models with nonlinear or dual observers\cite{corno2015,dey2015,bartlett2016}; on reduced-order realizations of the full model\cite{smith2010}, obtained for instance with the discrete-time realization algorithm\cite{lee2012,plett2015}; on reduced DFN models with dedicated observers\cite{klein2013}; on linear time-varying reductions of the full model\cite{sturm2018}; and on a full thermal-electrochemical model discretized by orthogonal collocation\cite{bizeray2015}. Joint estimation of states and parameters goes back to the dual EKF\cite{plett2004}, and which DFN parameters voltage data can identify has been studied through the Fisher information\cite{schmidt2010,forman2012} and, for the single particle model, structurally\cite{bizeray2019}. For plating, control-oriented models of lithium deposition\cite{perkins2012} and observers of the anode potential\cite{li2021,chu2017} support charging that keeps this potential above zero\cite{chu2017,tomaszewska2019}; they rest on reduced models in which the distribution of the reaction current across the electrode is fixed or approximated. Two obstacles keep the full model out of most estimators. The first is well known: every time step of the DFN requires solving a nonlinear system that couples the reaction kinetics with charge conservation. Reformulated and compiled solvers already make this fast\cite{subramanian2009,torchio2016}, about \SI{3}{\milli\second} for a full discharge\cite{petlion}, so raw speed is not the real limit. The second is rarely stated. A Kalman filter runs the model alongside the cell and, at each sample, corrects its state and parameters using the gap between measured and predicted voltage. The extended Kalman filter (EKF) handles a nonlinear model by linearizing it at every step, so it needs the derivative of each step with respect to state and parameters. With an iterative solver inside the step, finite differences need one model solve per state and parameter, sensitivity equations of the differential-algebraic system\cite{cao2003} must be integrated alongside it, and differentiating through the solver's iterations is costly and gives the derivative of the solution only once the iterations have converged. Without the derivative one turns to sigma-point filters such as the unscented Kalman filter\cite{julier2004,wan2000}, which run the model on $2N+1$ sample states and whose cost therefore grows with the number of states $N$; learned surrogates of the nonlinear solve\cite{minn2024} remove the first obstacle but not the second.
+
+Our starting observation is that most of the DFN is linear. Diffusion in the particles and in the electrolyte can be advanced over a sampling interval exactly, in closed form; only the kinetics, 130 algebraic equations on our grid, are nonlinear. Once Newton's method has solved them, the derivative of their solution follows from the implicit function theorem with one linear solve, using the matrix that Newton has just factorized, the principle behind implicit differentiation in optimization software\cite{andersson2019,blondel2022}. The paper makes three contributions:
+\begin{itemize}
+\item a reorganization of the DFN for filtering, with exact integration of the linear part, the exact step derivative from the implicit function theorem, and a covariance propagation that exploits its low-rank structure (Section~\ref{sec:model});
+\item a test design that asks three separate questions of every estimate (is it identifiable, is the model biased, is the filter honest about its uncertainty) and answers each with its own experiment (Section~\ref{sec:ageing});
+\item numerical evidence against an independent high-resolution reference: the filter estimates three ageing parameters within the bias of the model, with them resolves the plating potential during charge where the SPMe-based filter does not, follows an ageing cell for 178 hours, and shows why estimates read near full charge fail (Section~\ref{sec:results}).
+\end{itemize}
+All results are numerical by design: the reference is a fine simulation of the same physics with an independent code\cite{pybamm}, the only setting in which every internal quantity the filter claims to estimate can be checked. Throughout, a C-rate expresses current relative to capacity (1C charges the cell in one hour).
+
+% ===================================================================
+\section{Methods}\label{sec:model}
+
+\subsection{Cell and Ageing Parameters}
+We model an LG M50 cylindrical cell (graphite negative electrode, NMC811 positive electrode, \SI{5}{\ampere\hour}) with the isothermal DFN and the parameters of Chen et al.\cite{chen2020}. Ageing is described by four numbers (Fig.~\ref{fig:cell}), each scaling a nominal value: the film resistance $\Rf\in[1,10]$ (a multiple of the nominal film resistance $R^{0}_{\mathrm f}$), the fraction of negative-electrode active material lost, $\LAM\in[0,0.3]$, the fraction of cyclable lithium lost, $\LLI\in[0,0.2]$, and the negative-electrode solid diffusivity $\Ds\in[0.3,1]$ (Appendix~\ref{app:model}).
+
+To know the truth, we test against a simulated cell, the \emph{reference}: the DFN of PyBaMM\cite{pybamm} on a much finer grid (40/20/40 cells across negative electrode, separator and positive electrode, 300 radial nodes per particle) with its own solver. It has the same physics and parameter values as our model; only the discretization, the time integration and the code differ. The true ageing state and every internal quantity are therefore known, the current is exact, and the voltage carries \SI{2}{\milli\volt} of noise.
+
+\subsection{Exact Integration of the Linear Part}
+The DFN has three coupled parts (Fig.~\ref{fig:scheme}): diffusion of lithium in the particles, diffusion of lithium ions in the electrolyte, and the reaction that moves lithium between them. The first two are linear as long as the diffusivities do not depend on concentration (relaxed for the electrolyte in Appendix~\ref{app:model}). The third is the only nonlinearity: Butler--Volmer kinetics, together with charge conservation, set the reaction current from the reaction overpotential $\eta$, the part of the local voltage that drives the reaction.
+
+\begin{figure}[t]
+\centering
+\input{figures/fig_scheme.tex}
+\caption{The grey-box DFN as a loop. The linear dynamics (blue) are advanced exactly over each sampling interval; $\bm W$ reads the surface and electrolyte concentrations $\bm w$ from the state; the kinetics closure (orange), the only nonlinearity, gives the reaction currents $\bm j$, held over the next interval, the voltage and the plating potential, and $\partial\bm j/\partial\bm w$ by the implicit function theorem. Bottom: the step \eqref{eq:step}, same colours.}
+\label{fig:scheme}
+\end{figure}
+
+This split makes the model both fast and easy to differentiate. If the reaction currents are held constant over a sampling interval $\Delta t$ (a zero-order hold, the only approximation in time), both linear parts can be advanced exactly, with no time-stepping error: each particle through its mean concentration and 12 exponentially decaying modes, plus a small correction for the faster modes we drop; the electrolyte, discretized in finite volumes as $\dot{\ce}=\bm E\ce+\bm G\vj$, through a matrix exponential computed once (Appendix~\ref{app:model}). Collecting these quantities in the state $\vz$, one step reads
+\begin{equation}
+\vz^{+}=\mLam(\vth)\,\vz+\mB(\vth)\,\vj(\vz,\vth,I),
+\label{eq:step}
+\end{equation}
+where $\vth$ are the ageing parameters, $I$ is the applied current, $\mLam$ is block diagonal and $\mB$ maps the reaction currents into the state.
+
+The reaction currents $\vj$, one per electrode cell, come from the \emph{kinetics closure} $\vF(\vy;\vw,\vth,I)=\bm 0$: 130 algebraic equations on the grid of Section~\ref{sec:grid}, solved by Newton's method at every step, whose unknowns $\vy$ are the reaction current and the electrolyte and solid potentials in each cell, and whose inputs $\vw$ are the surface and electrolyte concentrations read from $\vz$. Its solution also gives the voltage and the plating potential (Appendix~\ref{app:model}). We call this reorganized model the \emph{grey-box DFN}, and the EKF built on it the \emph{grey-box EKF}.
+
+\subsection{The Derivative of the Step}\label{sec:ift}
+A Kalman filter propagates its uncertainty with the Jacobian $\mA=\partial\vz^{+}/\partial\vz$, which says how the next state changes when the current one changes slightly, and learns the parameters through $\partial\vz^{+}/\partial\vth$. Differentiating \eqref{eq:step} gives
+\begin{equation}
+\mA=\mLam+\mB\,\mC,\qquad \mC=\frac{\partial\vj}{\partial\vz}=\frac{\partial\vj}{\partial\vw}\,\frac{\partial\vw}{\partial\vz}.
+\label{eq:A}
+\end{equation}
+The first term, $\mLam$, is known. The second term, $\mB\mC$, says how the reaction currents respond to the state: $\mB$ is the known input matrix of the linear part and $\mC$ the response of the currents. The kinetics read only the concentrations $\vw$, so $\mC$ splits into two factors. $\partial\vw/\partial\vz$ is a fixed sparse matrix (a surface concentration, for instance, is the particle mean plus the modes evaluated at the surface). $\partial\vj/\partial\vw$ is the hard one: the currents are not an explicit formula of $\vw$ but the solution of $\vF(\vy;\vw)=\bm 0$, found by Newton's method. Yet this equation holds for every input: when $\vw$ changes, the solution $\vy$ moves so that $\vF$ stays zero. Differentiating this identity, $(\partial\vF/\partial\vy)(\partial\vy/\partial\vw)+\partial\vF/\partial\vw=\bm 0$, gives the implicit function theorem,
+\begin{equation}
+\frac{\partial\vy}{\partial\vw}=-\Big(\frac{\partial\vF}{\partial\vy}\Big)^{-1}\frac{\partial\vF}{\partial\vw},
+\label{eq:ift}
+\end{equation}
+whose rows for the reaction currents are the missing factor in \eqref{eq:A}. In a scalar example, $F=y^3+y-w=0$ has no explicit solution $y(w)$, but \eqref{eq:ift} gives $\dd y/\dd w=1/(3y^2+1)$, that is $1/4$ at $w=2$, $y=1$. Replacing $\partial\vF/\partial\vw$ with $\partial\vF/\partial\vth$ gives in the same way the sensitivity to the ageing parameters.
+
+In short, the derivative comes almost for free from the Newton solve the model performs anyway. The matrix $\partial\vF/\partial\vy$ is the one Newton has just factorized, so \eqref{eq:ift} costs a few triangular solves; and it is the derivative of the \emph{solution}, not of the procedure, so it does not depend on how many Newton iterations were taken or how they were started. The resulting $\mA$ agrees with automatic differentiation through the converged solver to $6\times10^{-13}$ in relative norm and costs \SI{0.5}{\milli\second} instead of \SI{122}{\milli\second} on the full model (Section~\ref{sec:grid}). Because \eqref{eq:A} is a block-diagonal matrix plus a correction of rank $n_j$ (the number of electrode cells), the covariance prediction can also be formed blockwise, in $O(N^2n_j)$ instead of $O(N^3)$ operations. The model and all its derivatives then take only \SI{8}{\percent} of a filter step; the rest is the dense covariance update.
+
+\subsection{Filter and Spatial Grid}\label{sec:grid}
+The filter is a standard EKF on the state $\vz$ augmented with the ageing parameters, which follow a random walk and are estimated in logit coordinates, a change of variable that keeps each within its physical range. The voltage noise is $\sigma_V=\SI{2}{\milli\volt}$ and the sampling interval $\Delta t=\SI{0.5}{\second}$. The initial cell state is known and the parameters start far from the truth; an unknown initial state of charge would raise the best achievable error for $\LAM$, which it then mimics, to at most 0.5\,\% of the range and change the others by at most 0.12\,\% (Section~\ref{sec:ageing}). A state guard, a simple form of constrained filtering\cite{simon2010}, rejects any correction that would push a concentration outside its physical limits. Three parameters ($\Rf$, $\LAM$, $\Ds$) are estimated in Sections~\ref{sec:ageing}--\ref{sec:charge}, with $\LLI$ fixed; all four in Section~\ref{sec:tracking} (details in Appendix~\ref{app:filter}).
+
+One choice mattered more than expected: where the grid cells are placed (Table~\ref{tab:grid} and Fig.~\ref{fig:grid}, mid-aged cell th2). With 20 cells per electrode and 10 in the separator, evenly spaced, the voltage error is only \SI{1.6}{\milli\volt} at 3C, yet fitting the parameters to noise-free reference data biases $\Ds$ by \SI{4.9}{\percent} of its range: the filter absorbs a small voltage error into the parameter to which the voltage is least sensitive. The bias comes from the grid, not from the particle model. On the coarsest grid, 12 modes instead of 8 change it only from $-9.2$ to $-8.6$\,\%, while each doubling of the uniform grid halves it ($-9.2$, $-4.9$, $-2.6$\,\%), at a cost that grows from 1.3 to \SI{55}{\milli\second} per step. Shrinking the cells towards the separator, where plating starts, in a 4:1 geometric progression (negative-electrode cells from 7.8 to \SI{2.0}{\micro\metre}) reduces the voltage error to \SI{0.6}{\milli\volt} and the $\Ds$ bias to $-1.3$\,\%, with the same number of cells and the same cost as the uniform 20/10/20 grid: less bias than doubling the grid, at one seventh of its cost. This grid, with $N=653$ states including the parameters, is used throughout.
+
+\begin{table}[t]
+\centering
+\caption{Effect of the Spatial Grid on Model Accuracy and on the Parameter Bias It Induces (Mid-Aged Cell th2)}
+\label{tab:grid}
+\footnotesize\setlength{\tabcolsep}{2.2pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Grid, modes & $N$ & $E_V$ 1C/3C & Bias & Cost\\
+ & & [mV] & $\Rf$/$\LAM$/$\Ds$ [\%] & [ms]\\
+\midrule
+10/5/10 unif., 8 & 248 & 2.30/3.54 & 6.1/$-$0.6/$-$9.2 & 1.3\\
+20/10/20 unif., 12 & 653 & 1.07/1.55 & 2.6/$-$0.3/$-$4.9 & 7.9\\
+40/20/40 unif., 16 & 1623 & 0.40/0.49 & 0.4/$-$0.2/$-$2.6 & 55\\
+\textbf{20/10/20 4:1, 12} & \textbf{653} & \textbf{0.03/0.60} & $\bm{-0.9}$/$\bm{-0.1}$/$\bm{-1.3}$ & \textbf{7.9}\\
+\bottomrule
+\end{tabular}\\[2pt]
+\parbox{\columnwidth}{\footnotesize $E_V$: closed-loop RMS voltage error against the reference (3C: \SI{30}{\second}). Bias: error of a batch fit of the three ageing parameters to noise-free reference data, in percent of each parameter's range. Cost: full EKF step on one desktop core.}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\input{figures/fig_grid.tex}
+\caption{A non-uniform grid removes most of the model bias at no cost. (a) Cell boundaries across the cell for the uniform and the 4:1 grid, both with 20/10/20 cells (electrode thicknesses of the parameter set\cite{chen2020}): the 4:1 grid shrinks the electrode cells geometrically towards the separator, where plating starts, from 7.8 to \SI{2.0}{\micro\metre} in the negative electrode. (b) Closed-loop RMS voltage error at 1C and 3C for the grids of Table~\ref{tab:grid}; the last group is the 4:1 grid. (c) Absolute bias of the three fitted ageing parameters. All values for the mid-aged cell th2.}
+\label{fig:grid}
+\end{figure}
+
+
+% ===================================================================
+% ===================================================================
+\section{Results}\label{sec:results}
+All tests use the reference of Section~\ref{sec:model} as the truth. Five true ageing states are used (Table~\ref{tab:theta}): a fresh cell, a mid-aged cell, a cell at the corner of the range and two random draws. Each test has two phases. The filter first learns the parameters on an estimation protocol (P6L, run twice: \SI{72}{\minute}) of $\pm$1C and $\pm$3C pulses, rests and slow discharges; its $-3$C pulses exceed \SI{4.2}{\volt}, so it is a test-bench protocol rather than BMS operation. It then continues, with what it has learned, on an evaluation protocol: a charge (F6Q: a 1C constant-current charge, then two 2C pulses that stop at \SI{4.2}{\volt}, as a BMS would) or a discharge with 1C, 2C and 3C pulses. For th3 the protocols start at a higher state of charge and its 1C charge is shorter (Appendix~\ref{app:protocols}). The analyses follow the order in which a BMS relies on the filter, each using what the previous one established: the filter must run fast enough (Section~\ref{sec:cost}), learn the ageing parameters of a cell of fixed age (Section~\ref{sec:ageing}), estimate with them the internal quantities that decide plating (Section~\ref{sec:charge}), and keep up as the cell ages (Section~\ref{sec:tracking}).
+
+\begin{table}[t]
+\centering
+\caption{True Ageing States}
+\label{tab:theta}
+\footnotesize\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccl@{}}
+\toprule
+State & $\Rf$ & $\LAM$ & $\LLI$ & $\Ds$ & Description\\
+\midrule
+th1 & 1 & 0 & 0 & 1 & fresh\\
+th2 & 4 & 0.1 & 0.05 & 0.55 & mid-aged\\
+th3 & 10 & 0.3 & 0.2 & 0.3 & corner of the range\\
+th4 & 8.51 & 0.179 & 0.058 & 0.330 & random draw\\
+th5 & 9.49 & 0.108 & 0.157 & 0.714 & random draw\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cost}\label{sec:cost}
+One filter step takes \SI{7.9}{\milli\second} at $N=653$ on one desktop core (Fig.~\ref{fig:cost}), from \SI{0.64}{\milli\second} at $N=168$ to \SI{11.9}{\milli\second} at $N=813$, and the cost grows as $N^2$ because the covariance dominates. An unscented Kalman filter (UKF) on the same model, which solves the kinetics at each of its $2N+1$ sigma points, takes \SI{287}{\milli\second}, 36 times more.
+
+\begin{figure}[t]
+\centering
+\input{figures/fig_cost.tex}
+\caption{Median cost of one filter step versus the number of states on one desktop core (JAX, Python dispatch); dotted: \SI{10}{\milli\second}. UKF on the same grey-box model, with the kinetics solved by Newton at every sigma point (Table~\ref{tab:filters}).}
+\label{fig:cost}
+\end{figure}
+
+
+\subsection{Ageing Parameters of a Cell at a Given Age}\label{sec:ageing}
+We first ask how well the filter recovers the ageing parameters of a cell whose age does not change. For each of the five states we ran the filter ten times over the estimation protocol, each time with its own noise sequence and from a wrong initial guess: the true values plus errors drawn uniformly within $\pm$\SI{40}{\percent} of each parameter's range (clipped to the range), with an initial standard deviation of \SI{30}{\percent} of the range (Appendix~\ref{app:filter}). Errors are absolute, in percent of each parameter's range (1\,\% is 0.09 for $\Rf$, 0.003 for $\LAM$): relative errors would be undefined at the fresh cell, where $\LAM$ and $\LLI$ are zero. Fig.~\ref{fig:mc} compares the final estimates with the true values: points on the diagonal are exact. The typical error (RMSE over the ten runs) is at most 1.1\,\% of the range at the four aged states and 2.6\,\% for $\Ds$ at the fresh cell (Fig.~\ref{fig:mc}d--f, blue bars).
+
+An error figure alone mixes three causes, each with a different remedy: the data may not contain the information, the model may differ from the cell, or the filter may misjudge its own uncertainty. We separate them with three experiments.
+
+\begin{figure*}[t]
+\centering
+\input{figures/fig_mc.tex}
+\caption{Static tests. (a)--(c) Ageing parameters estimated from voltage against their true values at the end of the estimation protocol: film resistance, loss of active material, diffusivity. Five true states, ten runs each with random initial errors and noise; on the diagonal the estimate is exact. (d)--(f) Where the error comes from, in \% of each parameter's range. Blue: error of our filter (RMSE over the ten runs). Orange, hatched: error of a perfect filter on our model (model bias). Grey: best precision these data allow (Cram\'er--Rao bound, with $\LLI$ fixed as in the filter). Blue close to orange: the error comes from the model, not from the filter.}
+\label{fig:mc}
+\end{figure*}
+
+\begin{figure}[t]
+\centering
+\input{figures/fig_nees.tex}
+\caption{Is the filter honest about its uncertainty? Time-averaged NEES of $(\Rf,\Ds)$ in each twin run (expected 2); the band $[1,3]$ applies to the mean over runs, in parentheses. (a) Mid-aged cell th2: EKF and UKF with the same tuning, 20 runs each. (b) Fresh cell th1: EKF, 20 runs.}
+\label{fig:nees}
+\end{figure}
+
+\emph{Do the data contain the information?} The Cram\'er--Rao bound is the smallest standard deviation that any unbiased method could reach from these data and this noise, computed from the Fisher information $\mathcal I=\sigma_V^{-2}\sum_k(\partial V_k/\partial\vth)^{\top}(\partial V_k/\partial\vth)$ with the exact sensitivities of Section~\ref{sec:model}, for the three estimated parameters with $\LLI$ fixed as in the filter (grey bars in Fig.~\ref{fig:mc}d--f). They stay below 0.5\,\% of the range, except for $\Ds$ at the fresh cell (1.6\,\%), whose voltage depends least on diffusion. The data are informative. One pair is the exception: on pulses, $\LAM$ and $\LLI$ change the voltage in almost the same way (correlation 0.89--0.98), so only one of them can be estimated; here we fix $\LLI$.
+
+\emph{Is the error the filter's or the model's?} We fit the parameters to noise-free reference data by Gauss--Newton, as a perfect filter would; the error that remains belongs to the model (orange bars in Fig.~\ref{fig:mc}d--f). Our filter's error is close to it. Removing it leaves at most 0.3\,\% of the range at the aged states (0.7\,\% for $\Ds$ at th2): most of the error belongs to the model, not to the filter.
+
+\emph{Does the filter know how uncertain it is?} With each estimate the filter reports a covariance $\mP_\theta$, an error bar. In a \emph{twin} experiment the data come from the filter's own model plus noise, so the model is exact and any problem is the filter's. The normalized estimation error squared (NEES)\cite{barshalom2001}, $\epsilon=\tilde{\vth}^{\top}\mP_{\theta}^{-1}\tilde{\vth}$ with $\tilde{\vth}$ the error, measures the error in units of the reported bar and should average the number of parameters. We compute it on $(\Rf,\Ds)$, average it over time in each run and accept a mean over at least 20 runs in $[1,3]$ (expected 2). At the mid-aged cell it is 2.2 (Fig.~\ref{fig:nees}), inside the band. An unscented filter on the same model and tuning does not pass (mean 11.2, five runs above 10), although its errors against the reference are similar to the EKF's (Table~\ref{tab:filters}). At the fresh cell the NEES is 15. In six of 20 runs the film resistance, started several times too high, was approached slowly while the filter already reported a narrow error bar. The errors remain small (at most 2.1\,\% for $\Rf$), but at this corner of the range, where all three parameters sit at the edge, the reported uncertainty is too optimistic (Appendix~\ref{app:results}).
+
+\subsection{Seeing Plating Coming During Charge}\label{sec:charge}
+With the parameters it has learned, the filter continues on the charge protocol. The quantities that matter there are evaluated in the negative-electrode cell next to the separator, where plating starts: the reaction overpotential $\eta$ and the plating potential
+\begin{equation}
+\phipl=\phi_{\mathrm s}-\phi_{\mathrm e}-\Rf R^{0}_{\mathrm f}\,j,
+\label{eq:phipl}
+\end{equation}
+the potential of the solid ($\phi_{\mathrm s}$) against the electrolyte ($\phi_{\mathrm e}$), corrected for the drop across the film carried by the reaction current $j$ of that cell (its entry of the vector $\vj$ in \eqref{eq:step}), with $\Rf R^{0}_{\mathrm f}$ the film resistance. Plating is thermodynamically possible where $\phipl<0$\cite{arora1999}. The reference has no plating reaction: the zero crossing is an event to detect, not a prediction of plated lithium. We report the RMS error of $\phipl$ and $\eta$ and how late the estimate crosses \SI{0}{\milli\volt} after the reference (the early-warning thresholds $+20$ and $+10$\,mV are in Appendix~\ref{app:results}). A positive error of $\phipl$ places the cell farther from plating than it is: it is the unsafe side.
+
+The current-practice baseline is an unscented Kalman filter on the SPMe that estimates the same three parameters with the same noise settings and initialization; its plating potential is the one the SPMe predicts at the separator from its single negative particle (Appendix~\ref{app:filter}).
+
+Fig.~\ref{fig:charge}a--c shows the plating potential at the separator during the first 2C charge pulse. In the reference it drops below zero within the first second of every pulse and reaches $-23$ to \SI{-69}{\milli\volt} across the five states. Over both pulses and all states, the grey-box filter follows it within \SIrange{0.04}{0.56}{\milli\volt} RMS; the SPMe filter errs by \SIrange{4.1}{23.8}{\milli\volt}, 25 to 500 times more (Table~\ref{tab:pulse}; medians over ten runs). The reaction overpotential and the minimum electrolyte concentration, which limits the power the cell can deliver, show the same pattern (Table~\ref{tab:charge} in Appendix~\ref{app:results}). The SPMe error is mostly on the safe side, predicting the cell closer to plating than it is, which costs charging time; in the first pulse of th2, however, a median of 31\,\% of its samples were more than \SI{5}{\milli\volt} on the unsafe side (up to 40\,\% in single runs of th4).
+
+\begin{figure*}[t]
+\centering
+\input{figures/fig_charge.tex}
+\caption{Plating potential at the separator during charge, for three ageing states; shaded: $\phipl<0$, where plating is possible. (a)--(c) First 2C charge pulse; the vertical line marks the end of the pulse (\SI{4.2}{\volt} limit for th2 and th4). (d)--(f) 1C constant-current charge before the pulses; markers show where the reference (circle), the grey-box EKF (cross, coinciding with the circle) and the SPMe UKF (square) first cross \SI{0}{\milli\volt}. Both filters see only the voltage.}
+\label{fig:charge}
+\end{figure*}
+
+\begin{table}[t]
+\centering
+\caption{Plating Potential at the Separator During the Two 2C Charge Pulses: RMS Error of the Estimate [mV] (Median Over Ten Runs; First / Second Pulse)}
+\label{tab:pulse}
+\footnotesize\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+State & min $\phipl$ ref. [mV] & grey-box EKF & SPMe UKF\\
+\midrule
+th1 & $-$67.5 / $-$68.7 & 0.13 / 0.14 & 23.8 / 21.0\\
+th2 & $-$63.0 / $-$59.7 & 0.14 / 0.56 & 7.0 / 14.0\\
+th3 & $-$24.4 / $-$22.6 & 0.08 / 0.04 & 23.1 / 22.1\\
+th4 & $-$55.3 / $-$53.6 & 0.17 / 0.08 & 13.1 / 20.6\\
+th5 & $-$42.7 / $-$40.5 & 0.21 / 0.07 & 8.3 / 4.1\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Plating Alarm During the 1C Charge: When Each Filter Signals $\phipl<0$, Relative to the Reference (Median of Ten Runs)}
+\label{tab:cc}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}llll@{}}
+\toprule
+State & Reference at 0\,mV & Grey-box EKF alarm & SPMe UKF alarm\\
+\midrule
+th1 & after 17.1 min & 1 s late & 94 s late\\
+th2 & after 16.9 min & 1 s early & 128 s late\\
+th4 & after 14.8 min & 2.5 s early & 5.5 min early\\
+th3 & never & no alarm & false alarm (10/10)\\
+th5 & never & no alarm & no alarm\\
+\bottomrule
+\end{tabular}\\[2pt]
+\parbox{\columnwidth}{\footnotesize Late: the filter signals plating conditions after they occur (unsafe). Early: it stops the charge before necessary (lost charging time).}
+\end{table}
+
+Pulses make detection easy: the potential steps below zero and both filters flag it in the first sample. The harder case is the slow 1C charge (Fig.~\ref{fig:charge}d--f, Table~\ref{tab:cc}), where the plating potential creeps down and crosses zero after 15 to \SI{17}{\minute} for th1, th2 and th4. The grey-box filter signals the zero crossing within \SI{2.5}{\second} of the reference (all thresholds within \SI{3.5}{\second}, worst run \SI{12.5}{\second}; Appendix~\ref{app:results}), with an error of at most \SI{0.25}{\milli\volt} RMS. The SPMe filter's error changes sign during the charge: it crosses zero one and a half to two minutes late for th1 and th2 and five minutes early for th4, and for th3, which never reaches zero, it raises a false alarm in all ten runs. The SPMe filter's positive errors reach \SIrange{6}{11}{\milli\volt}; a plating-aware charger built on it would need a safety margin of that size.
+
+
+In discharge, where electrolyte depletion rather than plating limits the cell, the picture is the same: at 3C the grey-box error in the reaction overpotential is \SIrange{0.8}{5.1}{\milli\volt} RMS against \SIrange{22}{30}{\milli\volt} for the SPMe filter (medians over ten runs; Appendix~\ref{app:results}).
+
+\subsection{Following a Cell as It Ages}\label{sec:tracking}
+\begin{figure*}[t]
+\centering
+\input{figures/fig_tracking.tex}
+\caption{Following a cell that ages during operation. (a)--(d) Estimates of the four ageing quantities against the truth (black). Dots: estimate at each check-up (RPT), read before the constant-voltage (CV) phase; thin line: every step. Grey: RPTs 4--10, not seen when the read-out point was chosen. (e) Error of the film-resistance estimate at each RPT; above the allowed value the RPT fails. Bars: read before the CV phase, two noise sequences; diamonds: read at the end of the one-hour CV phase. (f) Voltage error of the model alone, run with the true parameters, in the CV phase of each RPT, with our uniform film and with the film of the truth.}
+\label{fig:tracking}
+\end{figure*}
+
+In a vehicle the cell ages while the filter runs. To test this we let the reference cell age for \SI{294}{\hour}: 100 charge--discharge cycles, with film growth and material loss faster than in a real cell. Every ten cycles the cell goes through a reference performance test (RPT), a short check-up with pulses and a slow full discharge and charge, which ends with a constant-voltage (CV) phase. The filter runs on all the data without interruption and estimates all four parameters; at each RPT we read its estimates and compare them with the truth, which the filter never sees: reading an estimate does not change it. Over the run the film resistance grows from 1 to 11.2, $\LAM$ to 0.24 and $\LLI$ to 0.19. The film also grows unevenly along the electrode, which our model, with a uniform film, cannot represent. Since $\LAM$ and $\LLI$ are hard to tell apart, we score the lost lithium through the total cyclable lithium in the estimated state, the \emph{inventory}.
+
+An estimate passes an RPT if three conditions hold: its error is within an allowed value, the model's own error plus 3\,\% of the range (3.9\,\% for $\Rf$, 3.1\,\% for $\LAM$, 5.4\,\% for $\Ds$, 3.0\,\% for the inventory); the error lies within three times the error bar the filter reports; and the voltage the filter predicts stays within \SI{3}{\milli\volt} RMS of the measured one (Appendix~\ref{app:protocols}). When to read the estimates within each RPT, just before the CV phase rather than at its end, was chosen after looking at RPTs 1--3 only. RPTs 4--10 were then run with no further change, as a held-out test: it passes only if all seven RPTs pass.
+
+All four estimates follow the truth over the whole run (Fig.~\ref{fig:tracking}a--d), but one of them decides the outcome. Up to RPT 8, $\LAM$, $\Ds$ and the inventory pass every condition at every RPT, with errors of at most 1.5, 3.0 and 1.7\,\% of the range. The film resistance fails first, so we follow it in detail (Fig.~\ref{fig:tracking}e) and then return to the others.
+
+\emph{Read before the CV phase} (bars), the error of $\Rf$ stays within its allowed 3.9\,\% up to RPT 6 with one noise sequence and RPT 7 with the other. All estimates are therefore correct for \SI{178}{\hour} and \SI{207}{\hour}, three and four RPTs into the held-out test, while the film resistance grew 6.6 and 7.7 times and both losses covered about half of their range. Then the estimate drifts upward, by up to 11\,\% of the range at RPT 9, and the held-out test fails. In the last RPT the true film resistance also leaves the range of the static tests (11.2 against 10).
+
+\emph{Read one hour later, at the end of the CV phase} (diamonds), the same estimate fails already from RPT 3: in each CV phase it rises by about 4\,\% of the range. During this phase the voltage is held at \SI{4.2}{\volt} while the current fades, and the measured and predicted voltages differ by only \SI{0.15}{\milli\volt} on average. The cause is a very small error of the model itself. Run alone with the true parameters, it overestimates the voltage in the CV phase by \SI{0.7}{\milli\volt} on average (Fig.~\ref{fig:tracking}f, green). Near full charge the voltage hardly depends on the state inside the cell, so the filter explains this sub-millivolt mismatch by changing the parameters, and reports ageing that has not happened. The other quantities are pulled in the same way: in each CV phase $\LAM$ and the inventory fall by about 3\,\%, and they fail too. Letting the film vary along the electrode, as in the reference, removes \SI{44}{\percent} of the model error (Fig.~\ref{fig:tracking}f, purple). The rest, and the late drift of $\Rf$, remain unexplained; a lithium-consuming SEI side reaction, missing from our model, is the leading suspect. Two remedies on the filter side, fixed in advance, did not help: freezing the parameter updates during the CV phase, which left the model error unabsorbed, and a smooth saturation of the surface concentration in the closure.
+
+Two additions, by contrast, were essential to this run. A guard that rejects corrections pushing a concentration past its physical limit: without it the filter broke down after \SI{28}{\hour}. And a slow full discharge and charge in each RPT: with pulses alone the filter confused film resistance with loss of active material, and the measured capacity tells them apart.
+
+% ===================================================================
+\section{Discussion}
+The question addressed here is not how fast a full-order model can be evaluated, where compiled solvers already do well\cite{petlion,pybamm}, but how it can become the transition model of an estimator. The answer has three parts: integrate what is linear exactly; take the derivative of the nonlinear part from the implicit function theorem rather than from the solver; and keep the structure of that derivative in the covariance. The result is a filter at DFN resolution whose cost is set by the covariance of its 653 states rather than by the physics, and which resolves the plating potential during charge to a fraction of a millivolt where the reduced model errs by tens and misplaces the zero crossing by minutes.
+
+Four findings were not anticipated, and each says something about estimation with physical models in general. The spatial grid, not the number of modes, set the bias of the estimated parameters (Section~\ref{sec:grid}): a filter reads a small, systematic model error as a change in the parameter to which the voltage is least sensitive. For the same reason, a learned kinetics closure that changed the predicted voltage by only half a millivolt moved the estimated parameters by about 1\,\% of their range (Appendix~\ref{app:closure}). A sub-millivolt model error in the CV phase, where the voltage is nearly insensitive to the state, was enough to fake ageing; \emph{when} the estimates are read matters as much as how they are computed. And the EKF with exact derivatives was 36 times cheaper than an unscented filter on the same model and, at the mid-aged cell, passed the consistency test that the unscented filter failed.
+
+The three-question test design is, we believe, the part most likely to transfer. It traced the $\Ds$ error of the uniform grid to the model (a bias of 4.9\,\% at the mid-aged cell, which the 4:1 grid reduced to 1.3\,\%); at the fresh cell it attributed most of the remaining $\Ds$ error (2.6\,\%) to the model (a bias of 2.4\,\%) rather than to the data (a bound of 1.6\,\%); separately, it found a consistency failure of the filter in $\Rf$. In the ageing run it traced the errors after the CV phase to a model error near full charge.
+
+The limits are stated as results. The model is isothermal, keeps the kinetic prefactor (the rate constant of the reaction) fixed, has no side reaction, and diverges when the anode is almost empty, below \SI{2.5}{\volt} in discharge (Appendix~\ref{app:closure}). The reference shares the model's physics and non-ageing parameters, the current is exact, the initial state is known and the temperature is constant; real cells relax all of these. On pulses alone the filter cannot separate the two lithium losses; a slow full-range segment does, but adds about five hours to each test. Tracking holds for \SI{178}{\hour} of one accelerated, simulated ageing history with two noise seeds and a read-out before the CV phase. The filter is over-confident during the transient of the film resistance at a fresh cell. The reference has no plating reaction, so the results concern detecting the plating condition, not the amount of plated lithium. The SPMe baseline uses the noise settings of the grey-box filter; we did not retune it for its larger model error, nor test an SPMe-based EKF. The costs are measured on a desktop core, not on BMS hardware, where the number of states would first have to be reduced. No experimental data enter the results, by design: the reference simulation is the only truth against which every internal quantity can be checked.
+
+\section{Conclusion}
+A full-order electrochemical model becomes a tractable Kalman-filter model once its linear part is integrated exactly and the derivative of its kinetics is taken from the implicit function theorem at the converged solution. On a 653-state model the resulting EKF takes \SI{7.9}{\milli\second} per step, 36 times less than an unscented filter on the same model, estimates three ageing parameters within the bias of the model at aged states, passes the consistency test at the mid-aged cell where that filter does not, resolves the plating potential during charge within \SI{0.6}{\milli\volt} and detects its zero crossing within seconds where an SPMe-based filter is minutes late or early, and follows a cell ageing in operation until its film resistance has grown 6.6-fold, provided the estimates are read before the constant-voltage phase. The next steps are a model of the SEI side reaction to remove the bias near full charge, experimental validation on cells with measured plating onset, and a reduced-state implementation on BMS hardware.
+
+% ===================================================================
+\appendices
+\section{Model Details}\label{app:model}
+\emph{Ageing parameters and reference.} $\Rf$ multiplies the resistance of an SEI film of uniform thickness along the electrode, in the model and in the reference of the static tests; in the ageing run of Section~\ref{sec:tracking} the reference film grows with a thickness that varies along the electrode. $\LAM$ scales the active-material volume fraction and the specific surface area of the negative electrode. In the static tests, $\LLI$ is an offset of the initial stoichiometry (the filling fraction of the electrode), in the model and in the reference; its treatment as an estimated parameter is in Appendix~\ref{app:protocols}. $\Ds$ multiplies the negative-electrode solid diffusivity; in the formulas below $\Ds$ denotes the physical diffusivity. The mapping to PyBaMM's variables reproduces PyBaMM's algebraic solution to $10^{-3}$ at the corners of the range. The reference is PyBaMM 26.9 with relative tolerance $10^{-9}$; it uses 300 radial nodes per particle because coarser radial grids err by up to \SI{20}{\milli\volt} in the first second of a 3C pulse.
+
+\emph{Modal integration of particle diffusion.} In dimensionless radius $r\in[0,1]$ and time $t^{*}=t\Ds/R^2$, the concentration in a sphere with flux boundary condition is $c=\bar c+\sum_m a_m\psi_m$ with $\psi_m=\sin(\lambda_m r)/(r\sin\lambda_m)$ and $\tan\lambda_m=\lambda_m$. Multiplying Fick's equation by $r^2$ and integrating gives $\dd\bar c/\dd t^{*}=3j_{\mathrm{in}}$; multiplying by $\psi_n r^2$ and integrating by parts twice gives $N_n\dot a_n=-\lambda_n^2N_na_n+\psi_n(1)j_{\mathrm{in}}$ with $N_n=\int_0^1\psi_n^2r^2\dd r=\tfrac12$ for every mode under $\psi_n(1)=1$, hence $\dd a_m/\dd t^{*}=-\lambda_m^2a_m+2j_{\mathrm{in}}$. Under a zero-order hold, $a_m^{+}=e^{-\kappa_m\Delta t}a_m+(1-e^{-\kappa_m\Delta t})\,2j_{\mathrm{in}}/\kappa_m$ with $\kappa_m=\lambda_m^2\Ds/R^2$. An error below $10^{-3}$ requires $\lambda_M^2t^{*}\gtrsim60$, about 250 modes at $t^{*}=10^{-4}$ but 3 at $t^{*}=1$; a two-term exponential tail fitted to the exact sum of modes 13 to 600, recomputed whenever $\Ds$ is updated, replaces the high modes. With 12 modes the voltage error is below \SI{0.3}{\milli\volt}.
+
+\emph{Electrolyte on a non-uniform grid.} Integrating the electrolyte equation over cell $i$ with face fluxes $D_{i+\frac12}(c_{i+1}-c_i)/h_{i+\frac12}$ gives $\dot{\ce}=\bm E\ce+\bm G\vj$, with $\bm E$ tridiagonal with rows summing to zero and $\bm G$ diagonal and zero in the separator; it is advanced with the exponential of the augmented matrix $[\bm E,\bm G;\bm 0,\bm 0]$. The face coefficients must be formed as the reference forms them: cell-width-weighted arithmetic means for the effective diffusivity and cell-width-weighted means of the $1/\ce$ factor of the diffusional conductivity.
+
+\emph{Concentration-dependent electrolyte transport.} Replacing constant transport by the concentration-dependent functions of the parameter set\cite{chen2020} and linearizing per step about the cell-mean electrolyte concentration preserves \eqref{eq:step} with $\bm E$ recomputed each step. Against a reference with variable transport, the closed-loop voltage error at 3C for \SI{30}{\second} is \SI{0.74}{\milli\volt} (constant transport: \SI{1.45}{\milli\volt}), the anode overpotential error \SI{0.06}{\milli\volt} and the minimum-electrolyte-concentration error \SI{0.25}{\percent} (constant: \SI{36}{\percent}); the structured sensitivities still agree with automatic differentiation to $6\times10^{-13}$. With constant transport a 3C pulse cannot last beyond about \SI{55}{\second}.
+
+\emph{Kinetics closure.} The equations are Butler--Volmer kinetics with the SEI overpotential, electrolyte charge conservation and the total-current constraint. On the same mesh the closure reproduces PyBaMM's algebraic solution to $1.2\times10^{-5}$ in reaction current and $8\times10^{-5}$ in voltage over 360 sampled states. Newton's method uses an analytical Jacobian, a line search and a step-halving fallback. The linear rows of the closure are satisfied exactly after one Newton iteration, so lithium is conserved to machine precision whatever the convergence of the nonlinear rows (drift at most $3\times10^{-13}$ over $10^4$ steps). The voltage does not depend directly on $\Ds$, which acts only through the dynamics. The parameter sensitivity $\partial\vz^{+}/\partial\vth$ adds to \eqref{eq:ift} the explicit dependence of $\mLam$ and $\mB$ on $\Ds$ and $\LAM$; $\partial\vF/\partial\vw$ and $\partial\vF/\partial\vth$ come from forward-mode differentiation of the explicit residual, and \eqref{eq:ift} costs one LU factorization and $n_j+1$ triangular solves.
+
+\section{Filter Details}\label{app:filter}
+The filter state is $(\vz,\bm\vartheta)$, with $\bm\vartheta$ the logit transform of $(\Rf,\LAM,\Ds)$, and of $\LLI$ when estimated, onto intervals wider than the ageing range ($\Rf\in[0.5,12]$, $\LAM\in[-0.05,0.4]$, $\Ds\in[0.15,1.3]$, $\LLI\in[-0.05,0.3]$). The update uses the Joseph form with a diagonal jitter of $10^{-12}$; the process noise is a random walk on the parameters; the initial parameter standard deviation is \SI{30}{\percent} of the range and the initial cell state is known. The state guard rejects a measurement update if the corrected electrolyte or surface concentration leaves its physical domain or if the next closure residual exceeds $10^{-2}$; it never triggered on the protocols of Sections~\ref{sec:ageing}--\ref{sec:charge}. All main results use the converged solver; Appendix~\ref{app:closure} tests a single Newton iteration, completed when the residual exceeds $10^{-4}$. Timings are medians over at least 3600 calls (100 for the UKF) with the machine otherwise idle; the amortized cost in a compiled loop is \SI{17}{\percent} lower, and the slowest step takes 2.95 times the median. Timings of the same step vary by up to \SI{10}{\percent} between sessions (Tables~\ref{tab:filters} and~\ref{tab:ablation}).
+
+\emph{Baselines.} The UKF on the same model is a square-root implementation with $2N+1$ sigma points, the same parameterization and tuning, and the kinetics solved by Newton at every sigma point. The SPMe baseline is a UKF on the SPMe\cite{marquis2019,moura2017} with the same parameters, noise and initialization, on the same electrolyte grid. Its internal quantities at the separator are evaluated from its single negative particle, which carries a uniform reaction current, and its electrolyte at the separator. Table~\ref{tab:filters} compares the EKF with this UKF.
+
+\begin{table}[t]
+\centering
+\caption{EKF Versus UKF on the Same Grey-Box Model (Mid-Aged Cell th2)}
+\label{tab:filters}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Filter & NEES & RMSE $\Rf$/$\LAM$/$\Ds$ [\%] & Cost [ms]\\
+\midrule
+grey-box EKF & 2.21 $\pm$ 0.84 & 0.78 / 0.21 / 0.97 & 7.9\\
+UKF, same model & 11.2 $\pm$ 11.2 & 0.81 / 0.30 / 0.94 & 287\\
+\bottomrule
+\end{tabular}\\[2pt]
+\parbox{\columnwidth}{\footnotesize NEES of $(\Rf,\Ds)$: twin test, mean and 95\,\% CI over 20 runs (expected 2). RMSE: ten runs against the reference. Cost: one step, $N=653$.}
+\end{table}
+
+\section{Protocols and Tracking Criteria}\label{app:protocols}
+\emph{Estimation protocol.} Fig.~\ref{fig:protocols} shows all protocols. P6L consists of $\pm$1C pulses of \SI{60}{\second} and $\pm$3C pulses of \SI{30}{\second} with rests, a \SI{300}{\second} 1C discharge, \SI{600}{\second} of rest and a \SI{780}{\second} C/5 discharge, repeated twice (\SI{4320}{\second}); it starts at a state of charge (SOC) of 0.5, except for th3, which starts at 0.75 because from 0.5 its second 3C pulse drives the reference below \SI{2.5}{\volt}.
+
+\emph{Charge protocol F6Q.} After P6L (Fig.~\ref{fig:protocols}a), a 1C constant-current charge of \SI{1272}{\second} (\SI{372}{\second} for th3) brings the nominal SOC to 0.6, followed by \SI{600}{\second} of rest and two 2C charge pulses of \SI{30}{\second} separated by \SI{300}{\second} of rest, each terminated at \SI{4.2}{\volt}. The pulse was chosen by a scan over SOC $\in\{0.6,0.7,0.8\}$ and 2C/3C for th1, th3 and th4: the least severe combination that brought the reference plating potential below \SI{10}{\milli\volt} for at least two of the three states while keeping the minimum electrolyte concentration above \SI{5}{\percent} of its initial value and the anode surface concentration below \SI{98}{\percent} of its maximum.
+
+\emph{Discharge protocol.} After P6L (Fig.~\ref{fig:protocols}b), 1C, 2C and 3C discharge pulses of \SI{30}{\second}; for th4 and th5 the reference reaches \SI{2.5}{\volt} during the 3C pulse and the current is cut there.
+
+\emph{Ageing reference.} Each ageing cycle (Fig.~\ref{fig:protocols}d) is a C/2 discharge to \SI{3.65}{\volt} followed by a 1C constant-current, constant-voltage (CC-CV) charge to \SI{4.2}{\volt}; SEI growth is accelerated 450 times and the loss of active material is driven by the current; $\Ds$ stays nominal. An RPT precedes every block of ten cycles and closes the run. The enriched RPT appends to P6L a C/2 discharge to \SI{2.5}{\volt} and a C/2 charge to \SI{4.2}{\volt} with a CV phase down to C/50; it lasts about \SI{7.5}{\hour} (Fig.~\ref{fig:protocols}c).
+
+\begin{figure*}[t]
+\centering
+\input{figures/fig_protocols.tex}
+\caption{Protocols for th2 and the ageing run: current (top; C-rate, positive in discharge, 1C $=$ \SI{5}{\ampere}) and reference voltage (bottom; dashed: \SI{4.2}{\volt}). Grey: estimation protocol P6L. (c) Check-up: C/2 discharge to \SI{3.65}{\volt}, P6L, then the slow segment: C/2 discharge to \SI{2.5}{\volt}, rest, C/2 charge to \SI{4.2}{\volt}, CV to C/50; vertical line: read-out. The $-3$C pulses of P6L briefly exceed \SI{4.2}{\volt}.}
+\label{fig:protocols}
+\end{figure*}
+
+\emph{Lithium loss as a parameter.} $\LLI$ is implemented as lithium removed from the anode particle averages, so that the linear structure of \eqref{eq:step} is unchanged, and is judged on the lithium inventory implied by the estimated state, which absorbs its correlation with $\LAM$.
+
+\emph{Criteria.} At each RPT an estimate passes if its error is within the batch-fit bias floor plus 3\,\% of the range ($\Rf$ 3.90, $\LAM$ 3.10, $\Ds$ 5.37, inventory 3.00\,\%), its error divided by the stated standard deviation satisfies $|z|\le3$, its logit stays more than \SI{2}{\percent} from the boundary, and the innovation RMS stays below \SI{3}{\milli\volt}. The thresholds were fixed before the ageing runs: the bias is the error of a perfect filter on our model (Section~\ref{sec:ageing}) and is not charged to the filter; 3\,\% is about three times the largest error of the static tests at the aged states (Fig.~\ref{fig:mc}d--f); $|z|\le3$ is the three-sigma bound; \SI{3}{\milli\volt} is $1.5\sigma_V$. RPT 0 is excluded (initial transient).
+
+\section{Additional Results}\label{app:results}
+\emph{Charge pulses.} Table~\ref{tab:charge} collects both 2C pulses for all states. The reaction overpotential and the minimum electrolyte concentration are resolved within \SIrange{0.08}{0.24}{\milli\volt} and \SI{1.1}{\percent} by the grey-box filter, against \SIrange{19}{34}{\milli\volt} and \SIrange{8}{22}{\percent} by the SPMe filter. The SPMe underestimates the minimum of $\phipl$ by \SIrange{8}{34}{\milli\volt}. Because the plating potential steps below zero at the start of each pulse, both filters detect every threshold crossing in the first sample (20 of 20 per state and threshold).
+
+\begin{table*}[t]
+\centering
+\caption{Internal States During the Two 2C Charge Pulses of F6Q, Grey-Box EKF (GB) Versus SPMe UKF (Median of Ten Runs)}
+\label{tab:charge}
+\footnotesize\setlength{\tabcolsep}{2.4pt}
+\begin{tabular}{@{}lcccccccc@{}}
+\toprule
+State & Pulse [s] & min $\phipl$ ref. [mV] & $E_{\phi}$ GB [mV] & $E_{\phi}$ SPMe [mV] & $E_\eta$ GB [mV] & $E_\eta$ SPMe [mV] & $c_{\mathrm{e,min}}$ GB / SPMe [\%] & min-$\phipl$ error SPMe [mV]\\
+\midrule
+th1 & 30.0 / 29.5 & $-$67.5 / $-$68.7 & 0.13 / 0.14 & 23.8 / 21.0 & 0.13 / 0.08 & 34.4 / 27.0 & 0.27, 0.25 / 20.8, 22.2 & $-$31.0 / $-$26.9\\
+th2 & 29.0 / 25.0 & $-$63.0 / $-$59.7 & 0.14 / 0.56 & 7.0 / 14.0 & 0.08 / 0.24 & 27.9 / 26.2 & 0.20, 1.06 / 14.9, 15.9 & $-$13.5 / $-$25.1\\
+th3 & 22.0 / 19.0 & $-$24.4 / $-$22.6 & 0.08 / 0.04 & 23.1 / 22.1 & 0.14 / 0.17 & 21.1 / 18.6 & 0.12, 0.25 / 8.0, 7.9 & $-$34.4 / $-$31.3\\
+th4 & 21.5 / 19.0 & $-$55.3 / $-$53.6 & 0.17 / 0.08 & 13.1 / 20.6 & 0.11 / 0.15 & 26.4 / 22.3 & 0.10, 0.44 / 16.3, 18.0 & $-$26.0 / $-$32.6\\
+th5 & 28.5 / 24.0 & $-$42.7 / $-$40.5 & 0.21 / 0.07 & 8.3 / 4.1 & 0.10 / 0.15 & 22.9 / 25.2 & 0.20, 0.58 / 8.3, 8.9 & $-$13.8 / $-$8.1\\
+\bottomrule
+\end{tabular}\\[2pt]
+\parbox{\textwidth}{\footnotesize Pairs: first / second pulse. $E_{\phi}$, $E_\eta$: RMS error of $\phipl$ and $\eta$ at the separator over the pulse; $c_{\mathrm{e,min}}$: maximum relative error of the minimum electrolyte concentration (GB pulses / SPMe pulses); last column: estimated minus true minimum of $\phipl$ (negative: closer to plating than it is). Pulses shorter than \SI{30}{\second} stopped at \SI{4.2}{\volt}.}
+\end{table*}
+
+\emph{1C charge: early-warning thresholds.} At \SI{+20}{} and \SI{+10}{\milli\volt} the grey-box filter crosses within \SI{3.5}{\second} of the reference (worst run \SI{12.5}{\second}). The SPMe filter crosses them 2.5 to \SI{7}{\minute} early, except th3 at \SI{+20}{\milli\volt} (\SI{27}{\second} late), and for th3 raises a false alarm at \SI{+10}{\milli\volt} in all runs (medians over ten runs).
+
+\emph{Discharge.} Fig.~\ref{fig:discharge} and Table~\ref{tab:baseline} give the 3C pulse for each state; the SPMe filter over-estimates the overpotential during and after the pulse. The plating potential stays above \SI{0.4}{\volt}; its RMS error is \SIrange{0.7}{3.2}{\milli\volt} for the grey-box filter and \SIrange{6.6}{10.6}{\milli\volt} for the SPMe (medians over ten runs).
+
+\begin{figure*}[t]
+\centering
+\input{figures/fig_discharge.tex}
+\caption{Reaction overpotential of the anode at the separator during a 3C discharge pulse (first noise seed). (a) Mid-aged cell th2, whose \SI{30}{\second} pulse stays above the voltage limit. (b), (c) Aged cells th4 and th5, for which the reference reaches \SI{2.5}{\volt} after \SI{17.5}{\second} and \SI{4}{\second} and the current is cut (vertical line).}
+\label{fig:discharge}
+\end{figure*}
+
+\begin{table}[t]
+\centering
+\caption{Internal-State Accuracy During the 3C Discharge Pulse (Median Over Ten Runs, Maximum in Parentheses)}
+\label{tab:baseline}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+State & Pulse & $E_\eta$ GB & $E_\eta$ SPMe & Margin & $c_{\mathrm{e,min}}$ GB / SPMe\\
+ & [s] & [mV] & [mV] & & [\%]\\
+\midrule
+th2 & 30 & 0.79 (1.09) & 24.2 (25.6) & 31 & 0.90 / 12.3\\
+th4 & 17.5 & 1.42 (1.87) & 30.0 (43.2) & 21 & 0.17 / 11.8\\
+th5 & 4.0 & 5.07 (5.31) & 22.1 (22.7) & 4.4 & 0.07 / 9.9\\
+\bottomrule
+\end{tabular}\\[2pt]
+\parbox{\columnwidth}{\footnotesize Margin: ratio of the median SPMe and grey-box errors of $\eta$.}
+\end{table}
+
+\emph{Consistency at the fresh cell.} The NEES excess of th1 does not depend on the grid (14.97 non-uniform, 15.08 uniform) and is reduced but not removed by widening the initial covariance (10.3) or by sampling the initial error relative to the true value (6.6); final-error medians are 0.4\,\% ($\Rf$) and 1.9\,\% ($\Ds$). For $\Ds$ at the fresh cell, the filter's own error after bias subtraction reaches 3.4\,\% of the range (90th percentile over runs); half of the runs reach the edge of the filter's logit domain (Appendix~\ref{app:filter}) in the first minute.
+
+\section{Learned Closure and the Residual Certificate}\label{app:closure}
+\emph{Question.} Learned surrogates of the Newton solve have been proposed\cite{minn2024}; does one help our filter? We compare four ways to solve the kinetics closure (Table~\ref{tab:ablation}): a trained network alone; the network as the starting point of one Newton iteration; and Newton run to convergence, started from the previous step's solution (warm start) or from a fixed guess (cold start). All four use the 4:1 grid, th2, the estimation protocol followed by the discharge pulses (\num{10620} steps) and the same ten noise sequences.
+
+\emph{The network.} It is a reduced multiple-input operator network (MIONet, \num{56802} trainable parameters) that maps the local fields, the current and the ageing multipliers to the reaction current in each grid cell, with the charge balance enforced exactly. It is trained on \num{80000} states of the 4:1 grid labelled by the converged Newton solver.
+
+\emph{Step 1: network alone.} On held-out states its reaction currents have a median error of \SI{1.5}{\percent} and a 99th percentile of \SI{13.5}{\percent}. Used in place of Newton, it changes the voltage predicted by the filter by only \SI{0.53}{\milli\volt} RMS. Yet the estimates move: at the end of the protocol the mean errors are $-2.5$, $-0.9$ and $+0.5$\,\% of the range for $\Rf$, $\LAM$ and $\Ds$, against $-1.4$, $-0.1$ and $-0.4$\,\% with the converged solver, a shift of about 1\,\% each, as large as the model bias of Fig.~\ref{fig:mc}. The filter reads the error in how the current is distributed as ageing: a small voltage error is not enough to accept a closure.
+
+\emph{Step 2: network plus one Newton iteration.} Starting Newton from the network, and completing it whenever the residual exceeds $10^{-4}$, removes this shift: the voltage differs by \SI{0.004}{\milli\volt} from the converged solver and the estimates by less than 0.02\,\%. Completion is needed in \SI{11.3}{\percent} of the steps, mostly when the current changes. The step then costs \SI{7.61}{\milli\second}, \SI{3}{\percent} more than plain Newton with a warm start (\SI{7.42}{\milli\second}).
+
+\emph{Result.} Warm-started Newton, used for all results of the paper, is exact; the network alone would save only \SI{5}{\percent} of a step dominated by the covariance update (Section~\ref{sec:model}).
+
+\emph{Residual certificate.} The residual $\norm{\vF}_\infty$, the largest violation of the closure equations, is zero at the solution; a network always returns a number, right or wrong, with no sign of which. We therefore check the residual at every step: if it exceeds $10^{-4}$ after the network and one Newton iteration, Newton is run to convergence (\emph{completion}). On the protocols of the paper the residual is below $10^{-10}$ with the converged solver; after one iteration from the network its 99th percentile is $3\times10^{-3}$, and with the network alone 0.40. Fig.~\ref{fig:residual} tests this check where the network should fail, in a stress case outside the ageing range. The line is the residual before completion. At each 5C pulse it jumps above the threshold, by up to four orders of magnitude, and stays above it for up to a minute while the cell relaxes; on those steps (marks, \SI{31}{\percent} of the total) completion took over. The network alone would have returned a wrong current without warning.
+
+\begin{figure}[t]
+\centering
+\input{figures/fig_residual.tex}
+\caption{Checking the learned closure where it should fail: residual of the closure equations after the network and one Newton iteration, before completion, in a stress case outside the ageing range (three 5C pulses of \SI{10}{\second}, film resistance 15 times nominal, initial electrolyte concentration halved, $\LAM=0.3$). Dashed: threshold for completion; marks: completed steps.}
+\label{fig:residual}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Ablation of the Learned Closure (th2, \num{10620} Steps, Mean Over Ten Runs)}
+\label{tab:ablation}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Closure & $\Delta V$ & Compl. & Final error $\Rf$/$\LAM$/$\Ds$ & Step\\
+ & [mV] & [\%] & [\% of range] & [ms]\\
+\midrule
+Network alone & 0.53$^{\ast}$ & --- & $-$2.47/$-$0.93/+0.46 & 7.06\\
+Network + 1 Newton & 0.004 & 11.3 & $-$1.46/$-$0.15/$-$0.44 & 7.61\\
+Warm start & 0 & 0.11$^{\dagger}$ & $-$1.45/$-$0.15/$-$0.45 & 7.42\\
+Cold start & 0 & --- & $-$1.45/$-$0.15/$-$0.45 & 8.70\\
+\bottomrule
+\end{tabular}\\[2pt]
+\parbox{\columnwidth}{\footnotesize $\Delta V$: closed-loop voltage difference from the converged solver; Compl.: steps where Newton is completed; final error: estimate minus truth at the end of the protocol. $^{\ast}$\SI{1.5}{\milli\volt} on a 3C pulse in open loop. $^{\dagger}$Fallback.}
+\end{table}
+
+\emph{Validity limit.} The residual also marks where the model stops being valid. Discharged below \SI{2.5}{\volt}, with the anode surface below \SI{2}{\percent} of its maximum concentration, the aged cells made the grey-box model diverge even in open loop with the true parameters: the open-circuit potential and the exchange current are singular there, and unlike the SPMe our model resolves the surface concentration in each cell. Within the \SI{4.2}{\volt} charge limit, in the static tests, the anode surface stayed below \SI{77}{\percent} of its maximum, the guard never rejected an update and the residual stayed below $10^{-10}$; in the CV phases of the ageing run the residual reaches its maximum, where the model is weakest.
+
+\section*{Data and Code Availability}
+The reference simulations, campaign reports, source data of every figure (all in pgfplots) and the Python/JAX code will be deposited on GitHub \todo{repository URL}.
+
+\section*{Acknowledgment}
+\todo{Funding and acknowledgements.}
+
+% ===================================================================
+\begin{thebibliography}{99}
+\bibitem{arora1999} P. Arora, M. Doyle, and R. E. White, ``Mathematical modeling of the lithium deposition overcharge reaction in lithium-ion batteries using carbon-based negative electrodes,'' \emph{J. Electrochem. Soc.}, vol. 146, no. 10, pp. 3543--3553, 1999.
+\bibitem{waldmann2018} T. Waldmann, B.-I. Hogg, and M. Wohlfahrt-Mehrens, ``Li plating as unwanted side reaction in commercial Li-ion cells---A review,'' \emph{J. Power Sources}, vol. 384, pp. 107--124, 2018.
+\bibitem{birkl2017} C. R. Birkl, M. R. Roberts, E. McTurk, P. G. Bruce, and D. A. Howey, ``Degradation diagnostics for lithium ion cells,'' \emph{J. Power Sources}, vol. 341, pp. 373--386, 2017.
+\bibitem{reniers2019} J. M. Reniers, G. Mulder, and D. A. Howey, ``Review and performance comparison of mechanical-chemical degradation models for lithium-ion batteries,'' \emph{J. Electrochem. Soc.}, vol. 166, no. 14, pp. A3189--A3200, 2019.
+\bibitem{okane2022} S. E. J. O'Kane \emph{et al.}, ``Lithium-ion battery degradation: How to model it,'' \emph{Phys. Chem. Chem. Phys.}, vol. 24, no. 13, pp. 7909--7922, 2022.
+\bibitem{doyle1993} M. Doyle, T. F. Fuller, and J. Newman, ``Modeling of galvanostatic charge and discharge of the lithium/polymer/insertion cell,'' \emph{J. Electrochem. Soc.}, vol. 140, no. 6, pp. 1526--1533, 1993.
+\bibitem{ramadesigan2012} V. Ramadesigan, P. W. C. Northrop, S. De, S. Santhanagopalan, R. D. Braatz, and V. R. Subramanian, ``Modeling and simulation of lithium-ion batteries from a systems engineering perspective,'' \emph{J. Electrochem. Soc.}, vol. 159, no. 3, pp. R31--R45, 2012.
+\bibitem{brosaplanella2022} F. Brosa Planella \emph{et al.}, ``A continuum of physics-based lithium-ion battery models reviewed,'' \emph{Prog. Energy}, vol. 4, no. 4, Art. no. 042003, 2022.
+\bibitem{marquis2019} S. G. Marquis, V. Sulzer, R. Timms, C. P. Please, and S. J. Chapman, ``An asymptotic derivation of a single particle model with electrolyte,'' \emph{J. Electrochem. Soc.}, vol. 166, no. 15, pp. A3693--A3706, 2019.
+\bibitem{moura2017} S. J. Moura, F. Bribiesca Argomedo, R. Klein, A. Mirtabatabaei, and M. Krstic, ``Battery state estimation for a single particle model with electrolyte dynamics,'' \emph{IEEE Trans. Control Syst. Technol.}, vol. 25, no. 2, pp. 453--468, 2017.
+\bibitem{chaturvedi2010} N. A. Chaturvedi, R. Klein, J. Christensen, J. Ahmed, and A. Kojic, ``Algorithms for advanced battery-management systems,'' \emph{IEEE Control Syst. Mag.}, vol. 30, no. 3, pp. 49--68, 2010.
+\bibitem{santhanagopalan2006} S. Santhanagopalan and R. E. White, ``Online estimation of the state of charge of a lithium ion cell,'' \emph{J. Power Sources}, vol. 161, no. 2, pp. 1346--1355, 2006.
+\bibitem{rahimian2012} S. K. Rahimian, S. Rayman, and R. E. White, ``State of charge and loss of active material estimation of a lithium ion cell under low earth orbit condition using Kalman filtering approaches,'' \emph{J. Electrochem. Soc.}, vol. 159, no. 6, pp. A860--A872, 2012.
+\bibitem{corno2015} M. Corno, N. Bhatt, S. M. Savaresi, and M. Verhaegen, ``Electrochemical model-based state of charge estimation for Li-ion cells,'' \emph{IEEE Trans. Control Syst. Technol.}, vol. 23, no. 1, pp. 117--127, 2015.
+\bibitem{dey2015} S. Dey, B. Ayalew, and P. Pisu, ``Nonlinear robust observers for state-of-charge estimation of lithium-ion cells based on a reduced electrochemical model,'' \emph{IEEE Trans. Control Syst. Technol.}, vol. 23, no. 5, pp. 1935--1942, 2015.
+\bibitem{bartlett2016} A. Bartlett, J. Marcicki, S. Onori, G. Rizzoni, X. G. Yang, and T. Miller, ``Electrochemical model-based state of charge and capacity estimation for a composite electrode lithium-ion battery,'' \emph{IEEE Trans. Control Syst. Technol.}, vol. 24, no. 2, pp. 384--399, 2016.
+\bibitem{smith2010} K. A. Smith, C. D. Rahn, and C.-Y. Wang, ``Model-based electrochemical estimation and constraint management for pulse operation of lithium ion batteries,'' \emph{IEEE Trans. Control Syst. Technol.}, vol. 18, no. 3, pp. 654--663, 2010.
+\bibitem{lee2012} J. L. Lee, A. Chemistruck, and G. L. Plett, ``Discrete-time realization of transcendental impedance models, with application to modeling spherical solid diffusion,'' \emph{J. Power Sources}, vol. 206, pp. 367--377, 2012.
+\bibitem{plett2015} G. L. Plett, \emph{Battery Management Systems, Volume I: Battery Modeling}. Norwood, MA, USA: Artech House, 2015.
+\bibitem{klein2013} R. Klein, N. A. Chaturvedi, J. Christensen, J. Ahmed, R. Findeisen, and A. Kojic, ``Electrochemical model based observer design for a lithium-ion battery,'' \emph{IEEE Trans. Control Syst. Technol.}, vol. 21, no. 2, pp. 289--301, 2013.
+\bibitem{sturm2018} J. Sturm, H. Ennifar, S. V. Erhard, A. Rheinfeld, S. Kosch, and A. Jossen, ``State estimation of lithium-ion cells using a physicochemical model based extended Kalman filter,'' \emph{Appl. Energy}, vol. 223, pp. 103--123, 2018.
+\bibitem{bizeray2015} A. M. Bizeray, S. Zhao, S. R. Duncan, and D. A. Howey, ``Lithium-ion battery thermal-electrochemical model-based state estimation using orthogonal collocation and a modified extended Kalman filter,'' \emph{J. Power Sources}, vol. 296, pp. 400--412, 2015.
+\bibitem{plett2004} G. L. Plett, ``Extended Kalman filtering for battery management systems of LiPB-based HEV battery packs: Part 3. State and parameter estimation,'' \emph{J. Power Sources}, vol. 134, no. 2, pp. 277--292, 2004.
+\bibitem{schmidt2010} A. P. Schmidt, M. Bitzer, \'A. W. Imre, and L. Guzzella, ``Experiment-driven electrochemical modeling and systematic parameterization for a lithium-ion battery cell,'' \emph{J. Power Sources}, vol. 195, no. 15, pp. 5071--5080, 2010.
+\bibitem{forman2012} J. C. Forman, S. J. Moura, J. L. Stein, and H. K. Fathy, ``Genetic identification and Fisher identifiability analysis of the Doyle--Fuller--Newman model from experimental cycling of a LiFePO$_4$ cell,'' \emph{J. Power Sources}, vol. 210, pp. 263--275, 2012.
+\bibitem{bizeray2019} A. M. Bizeray, J.-H. Kim, S. R. Duncan, and D. A. Howey, ``Identifiability and parameter estimation of the single particle lithium-ion battery model,'' \emph{IEEE Trans. Control Syst. Technol.}, vol. 27, no. 5, pp. 1862--1877, 2019.
+\bibitem{perkins2012} R. D. Perkins, A. V. Randall, X. Zhang, and G. L. Plett, ``Controls oriented reduced order modeling of lithium deposition on overcharge,'' \emph{J. Power Sources}, vol. 209, pp. 318--325, 2012.
+\bibitem{li2021} L. Li \emph{et al.}, ``Lithium-ion battery cathode and anode potential observer based on reduced-order electrochemical single particle model,'' \emph{J. Energy Storage}, vol. 44, Art. no. 103324, 2021.
+\bibitem{chu2017} Z. Chu, X. Feng, L. Lu, J. Li, X. Han, and M. Ouyang, ``Non-destructive fast charging algorithm of lithium-ion batteries based on the control-oriented electrochemical model,'' \emph{Appl. Energy}, vol. 204, pp. 1240--1250, 2017.
+\bibitem{tomaszewska2019} A. Tomaszewska \emph{et al.}, ``Lithium-ion battery fast charging: A review,'' \emph{eTransportation}, vol. 1, Art. no. 100011, 2019.
+\bibitem{subramanian2009} V. R. Subramanian, V. Boovaragavan, V. Ramadesigan, and M. Arabandi, ``Mathematical model reformulation for lithium-ion battery simulations: Galvanostatic boundary conditions,'' \emph{J. Electrochem. Soc.}, vol. 156, no. 4, pp. A260--A271, 2009.
+\bibitem{torchio2016} M. Torchio, L. Magni, R. B. Gopaluni, R. D. Braatz, and D. M. Raimondo, ``LIONSIMBA: A Matlab framework based on a finite volume model suitable for Li-ion battery design, simulation, and control,'' \emph{J. Electrochem. Soc.}, vol. 163, no. 7, pp. A1192--A1205, 2016.
+\bibitem{petlion} M. D. Berliner, D. A. Cogswell, M. Z. Bazant, and R. D. Braatz, ``Methods---PETLION: Open-source software for millisecond-scale porous electrode theory-based lithium-ion battery simulations,'' \emph{J. Electrochem. Soc.}, vol. 168, no. 9, Art. no. 090504, 2021.
+\bibitem{cao2003} Y. Cao, S. Li, L. Petzold, and R. Serban, ``Adjoint sensitivity analysis for differential-algebraic equations: The adjoint DAE system and its numerical solution,'' \emph{SIAM J. Sci. Comput.}, vol. 24, no. 3, pp. 1076--1089, 2003.
+\bibitem{julier2004} S. J. Julier and J. K. Uhlmann, ``Unscented filtering and nonlinear estimation,'' \emph{Proc. IEEE}, vol. 92, no. 3, pp. 401--422, 2004.
+\bibitem{wan2000} E. A. Wan and R. van der Merwe, ``The unscented Kalman filter for nonlinear estimation,'' in \emph{Proc. IEEE Adaptive Syst. Signal Process., Commun., Control Symp. (AS-SPCC)}, 2000, pp. 153--158.
+\bibitem{minn2024} Y. Huang, C. Zou, Y. Li, and T. Wik, ``MINN: Learning the dynamics of differential-algebraic equations and application to battery modeling,'' \emph{IEEE Trans. Pattern Anal. Mach. Intell.}, vol. 46, no. 12, pp. 11331--11344, 2024.
+\bibitem{andersson2019} J. A. E. Andersson, J. Gillis, G. Horn, J. B. Rawlings, and M. Diehl, ``CasADi: A software framework for nonlinear optimization and optimal control,'' \emph{Math. Program. Comput.}, vol. 11, no. 1, pp. 1--36, 2019.
+\bibitem{blondel2022} M. Blondel \emph{et al.}, ``Efficient and modular implicit differentiation,'' in \emph{Adv. Neural Inf. Process. Syst. (NeurIPS)}, vol. 35, 2022, pp. 5230--5242.
+\bibitem{pybamm} V. Sulzer, S. G. Marquis, R. Timms, M. Robinson, and S. J. Chapman, ``Python Battery Mathematical Modelling (PyBaMM),'' \emph{J. Open Res. Softw.}, vol. 9, no. 1, Art. no. 14, 2021.
+\bibitem{chen2020} C.-H. Chen, F. Brosa Planella, K. O'Regan, D. Gastol, W. D. Widanage, and E. Kendrick, ``Development of experimental techniques for parameterization of multi-scale lithium-ion battery models,'' \emph{J. Electrochem. Soc.}, vol. 167, no. 8, Art. no. 080534, 2020.
+\bibitem{simon2010} D. Simon, ``Kalman filtering with state constraints: A survey of linear and nonlinear algorithms,'' \emph{IET Control Theory Appl.}, vol. 4, no. 8, pp. 1303--1318, 2010.
+\bibitem{barshalom2001} Y. Bar-Shalom, X. R. Li, and T. Kirubarajan, \emph{Estimation With Applications to Tracking and Navigation}. New York, NY, USA: Wiley, 2001.
+\end{thebibliography}
+
+\end{document}

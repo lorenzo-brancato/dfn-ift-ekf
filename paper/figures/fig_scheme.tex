@@ -1,0 +1,49 @@
+% Grey-box DFN as a Lur'e-type loop: exact linear dynamics in feedback with the static kinetics closure (TikZ, no data). v0.8 r3.
+\begin{tikzpicture}[x=1mm, y=0.88mm, every node/.style={font=\footnotesize},
+  arr/.style={-{Stealth[length=1.5mm, width=1.2mm]}, line width=0.55pt},
+  lab/.style={font=\scriptsize, inner sep=1pt}]
+% ---------- nonlinear block: kinetics closure ----------
+\fill[cOra!12, rounded corners=3pt] (20,13) rectangle (66,30);
+\draw[cOra!80!black, line width=0.6pt, rounded corners=3pt] (20,13) rectangle (66,30);
+\node[anchor=north west, font=\scriptsize\bfseries, text=cOra!55!black, inner sep=0pt] at (22,28.6) {STATIC, NONLINEAR};
+\begin{scope}[shift={(29,18.6)}]
+  \draw[black!40, line width=0.3pt] (-5.5,0) -- (5.5,0) (0,-4) -- (0,4);
+  \draw[cOra!80!black, line width=0.9pt] plot[smooth, domain=-5:5, samples=40] (\x,{3.6*sinh(0.36*\x)/sinh(0.36*5)});
+  \node[font=\tiny, text=black!60, anchor=north east, inner sep=0.4pt] at (5.5,0) {$\eta$};
+  \node[font=\tiny, text=black!60, anchor=north west, inner sep=0.4pt] at (0,4) {$j$};
+\end{scope}
+\node[anchor=west, align=left, inner sep=0pt] at (37,19.2) {\textbf{Kinetics closure}\\[0.2pt]{\scriptsize $\vF(\vy;\vw,\vth,I)=\bm 0$}\\[-0.6pt]{\scriptsize Butler--Volmer, Newton}};
+% ---------- linear block: exact dynamics ----------
+\fill[cBlu!6, rounded corners=3pt] (12,-13) rectangle (74,4);
+\draw[cBlu!75!black, line width=0.6pt, rounded corners=3pt] (12,-13) rectangle (74,4);
+\node[anchor=north west, font=\scriptsize\bfseries, text=cBlu!80!black, inner sep=0pt] at (14,2.6) {LINEAR, EXACT OVER $\Delta t$};
+% particle icon
+\shade[ball color=cGre!50] (19,-6.2) circle[radius=3.3mm];
+\foreach \a in {90,210,330}{\draw[-{Stealth[length=0.8mm]}, white, line width=0.45pt] ([shift={(\a:3.0mm)}]19,-6.2) -- ([shift={(\a:1.1mm)}]19,-6.2);}
+\node[anchor=west, align=left, inner sep=0pt] at (23.6,-6.2) {\textbf{Particles}\\[-1pt]{\scriptsize 12 modes each}};
+% electrolyte icon
+\begin{scope}[shift={(44,-9.4)}]
+  \fill[cGre!22] (0,0) rectangle (2.8,6.4); \fill[black!9] (2.8,0) rectangle (4.0,6.4); \fill[cPur!22] (4.0,0) rectangle (6.8,6.4);
+  \draw[black!60, line width=0.3pt] (0,0) rectangle (6.8,6.4);
+  \draw[cBlu, line width=0.75pt] plot[smooth, domain=0:6.8] (\x,{3.2+2.0*tanh(0.85*(\x-3.4))});
+\end{scope}
+\node[anchor=west, align=left, inner sep=0pt] at (52.6,-6.2) {\textbf{Electrolyte}\\[-1pt]{\scriptsize $e^{\bm E\Delta t}$, once}};
+% ---------- loop ----------
+% state -> selector W -> w
+\draw[line width=0.55pt, cBlu!80!black] (12,-4.5) -- (5,-4.5) -- (5,1.5);
+\node[draw=cBlu!75!black, fill=white, line width=0.5pt, rounded corners=1.5pt, minimum width=6.4mm, minimum height=5.2mm, inner sep=0pt] (W) at (5,4.6) {$\bm W$};
+\draw[arr, cBlu!80!black] (5,7.2) -- (5,21.5) -- (20,21.5);
+\node[lab, text=cBlu!80!black, anchor=east] at (4.2,-1.6) {$\vz_k$};
+\node[lab, text=cBlu!80!black, anchor=south, align=center] at (12.6,21.6) {$\vw$};
+% j down into the linear block
+\draw[arr, cOra!80!black] (56,13) -- (56,4);
+\node[lab, text=cOra!70!black, anchor=west] at (57,10.5) {$\vj$, held over $\Delta t$};
+\node[lab, text=cOra!70!black, anchor=west] at (57,7.1) {and $\partial\vj/\partial\vw$ (IFT)};
+% inputs and outputs
+\draw[arr] (43,35) -- (43,30); \node[anchor=west, inner sep=1pt] at (43.6,33.4) {current $I_k$};
+\draw[arr] (66,21.5) -- (73,21.5) node[right, align=left, inner sep=1pt] {$V_k$\\[-1pt]$\phipl$};
+\draw[arr, black!55, dash pattern=on 1.6pt off 1pt] (80.5,-4.5) node[right, text=black!70, inner sep=1pt] {$\vth$} -- (74,-4.5);
+\draw[arr, black!55, dash pattern=on 1.6pt off 1pt] (28,35) -- (28,30); \node[anchor=east, text=black!70, inner sep=1pt] at (27.4,33.4) {$\vth$};
+% ---------- the step ----------
+\node[anchor=north, inner sep=1pt] at (43,-15) {$\vz_{k+1}=\textcolor{cBlu!80!black}{\mLam(\vth)\,\vz_k}+\textcolor{cBlu!80!black}{\mB(\vth)}\,\textcolor{cOra!75!black}{\vj(\vz_k,\vth,I_k)}$};
+\end{tikzpicture}

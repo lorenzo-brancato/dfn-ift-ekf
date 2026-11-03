@@ -1,0 +1,65 @@
+% Plating potential at the separator during charge. Data: data/pulse_th*.csv, data/cc_th*.csv, data/cc_crossings.csv
+\begin{tikzpicture}
+\begin{groupplot}[paper,
+  group style={group size=3 by 2, horizontal sep=7mm, vertical sep=13mm, group name=g},
+  width=50mm, height=29mm]
+% ---------- row 1: first 2C charge pulse ----------
+\nextgroupplot[xmin=-10, xmax=60, ymin=-110, ymax=140, ytick={-100,-50,0,50,100},
+  xlabel={time from pulse start (s)}, ylabel={$\phi_{\mathrm{pl}}$ (mV)},
+  legend to name=legcharge, legend columns=3, legend style={/tikz/every even column/.append style={column sep=6mm}}]
+\fill[red!6] (axis cs:-10,-110) rectangle (axis cs:60,0);\draw[zero] (axis cs:-10,0) -- (axis cs:60,0);
+\draw[cGrey, line width=0.3pt] (axis cs:30,-110) -- (axis cs:30,140);
+\addplot[lref] table[x=t, y=phi_pl_reference_mV, col sep=comma] {figures/data/pulse_th1.csv};
+\addplot[lgb] table[x=t, y=phi_pl_EKF_mV, col sep=comma] {figures/data/pulse_th1.csv};
+\addplot[lspme] table[x=t, y=phi_pl_UKF_SPMe_mV, col sep=comma] {figures/data/pulse_th1.csv};
+\legend{reference, grey-box EKF, SPMe UKF}
+\node[anchor=south west, font=\footnotesize] at (rel axis cs:0.02,0.02) {th1, fresh};
+\nextgroupplot[xmin=-10, xmax=60, ymin=-110, ymax=140, ytick={-100,-50,0,50,100}, yticklabels={},
+  xlabel={time from pulse start (s)}]
+\fill[red!6] (axis cs:-10,-110) rectangle (axis cs:60,0);\draw[zero] (axis cs:-10,0) -- (axis cs:60,0);
+\draw[cGrey, line width=0.3pt] (axis cs:29,-110) -- (axis cs:29,140);
+\addplot[lref] table[x=t, y=phi_pl_reference_mV, col sep=comma] {figures/data/pulse_th2.csv};
+\addplot[lgb] table[x=t, y=phi_pl_EKF_mV, col sep=comma] {figures/data/pulse_th2.csv};
+\addplot[lspme] table[x=t, y=phi_pl_UKF_SPMe_mV, col sep=comma] {figures/data/pulse_th2.csv};
+\node[anchor=south west, font=\footnotesize] at (rel axis cs:0.02,0.02) {th2, mid-aged};
+\nextgroupplot[xmin=-10, xmax=60, ymin=-110, ymax=140, ytick={-100,-50,0,50,100}, yticklabels={},
+  xlabel={time from pulse start (s)}]
+\fill[red!6] (axis cs:-10,-110) rectangle (axis cs:60,0);\draw[zero] (axis cs:-10,0) -- (axis cs:60,0);
+\draw[cGrey, line width=0.3pt] (axis cs:21.5,-110) -- (axis cs:21.5,140);
+\addplot[lref] table[x=t, y=phi_pl_reference_mV, col sep=comma] {figures/data/pulse_th4.csv};
+\addplot[lgb] table[x=t, y=phi_pl_EKF_mV, col sep=comma] {figures/data/pulse_th4.csv};
+\addplot[lspme] table[x=t, y=phi_pl_UKF_SPMe_mV, col sep=comma] {figures/data/pulse_th4.csv};
+\node[anchor=south west, font=\footnotesize] at (rel axis cs:0.02,0.02) {th4, aged};
+% ---------- row 2: 1C constant-current charge; markers at the first zero crossing ----------
+\nextgroupplot[xmin=0, xmax=21.5, ymin=-25, ymax=60, xtick={0,5,10,15,20},
+  xlabel={time from start of 1C charge (min)}, ylabel={$\phi_{\mathrm{pl}}$ (mV)}]
+\fill[red!6] (axis cs:0,-25) rectangle (axis cs:21.5,0);\draw[zero] (axis cs:0,0) -- (axis cs:21.5,0);
+\addplot[lref, forget plot] table[x=tmin, y=phi_pl_reference_mV, col sep=comma] {figures/data/cc_th1.csv};
+\addplot[lgb, forget plot] table[x=tmin, y=phi_pl_EKF_mV, col sep=comma] {figures/data/cc_th1.csv};
+\addplot[lspme, forget plot] table[x=tmin, y=phi_pl_UKF_SPMe_mV, col sep=comma] {figures/data/cc_th1.csv};
+\node[anchor=south west, font=\footnotesize, text=red!55!black] at (axis cs:0.4,-24) {plating possible ($\phi_{\mathrm{pl}}<0$)};
+\addplot[only marks, mark=o, mark size=2.2pt, cRef, line width=0.6pt] coordinates {(17.1333,0)};
+\addplot[only marks, mark=x, mark size=2.6pt, cGB, line width=0.7pt] coordinates {(17.1,0)};
+\addplot[only marks, mark=square, mark size=2pt, cSPMe, line width=0.7pt] coordinates {(19.1333,0)};
+\nextgroupplot[xmin=0, xmax=21.5, ymin=-25, ymax=60, xtick={0,5,10,15,20}, yticklabels={},
+  xlabel={time from start of 1C charge (min)}]
+\fill[red!6] (axis cs:0,-25) rectangle (axis cs:21.5,0);\draw[zero] (axis cs:0,0) -- (axis cs:21.5,0);
+\addplot[lref] table[x=tmin, y=phi_pl_reference_mV, col sep=comma] {figures/data/cc_th2.csv};
+\addplot[lgb] table[x=tmin, y=phi_pl_EKF_mV, col sep=comma] {figures/data/cc_th2.csv};
+\addplot[lspme] table[x=tmin, y=phi_pl_UKF_SPMe_mV, col sep=comma] {figures/data/cc_th2.csv};
+\addplot[only marks, mark=o, mark size=2.2pt, cRef, line width=0.6pt] coordinates {(16.8667,0)};
+\addplot[only marks, mark=x, mark size=2.6pt, cGB, line width=0.7pt] coordinates {(16.8333,0)};
+\addplot[only marks, mark=square, mark size=2pt, cSPMe, line width=0.7pt] coordinates {(18.95,0)};
+\nextgroupplot[xmin=0, xmax=21.5, ymin=-25, ymax=60, xtick={0,5,10,15,20}, yticklabels={},
+  xlabel={time from start of 1C charge (min)}]
+\fill[red!6] (axis cs:0,-25) rectangle (axis cs:21.5,0);\draw[zero] (axis cs:0,0) -- (axis cs:21.5,0);
+\addplot[lref] table[x=tmin, y=phi_pl_reference_mV, col sep=comma] {figures/data/cc_th4.csv};
+\addplot[lgb] table[x=tmin, y=phi_pl_EKF_mV, col sep=comma] {figures/data/cc_th4.csv};
+\addplot[lspme] table[x=tmin, y=phi_pl_UKF_SPMe_mV, col sep=comma] {figures/data/cc_th4.csv};
+\addplot[only marks, mark=o, mark size=2.2pt, cRef, line width=0.6pt] coordinates {(14.8,0)};
+\addplot[only marks, mark=x, mark size=2.6pt, cGB, line width=0.7pt] coordinates {(14.75,0)};
+\addplot[only marks, mark=square, mark size=2pt, cSPMe, line width=0.7pt] coordinates {(9.08333,0)};
+\end{groupplot}
+\node[anchor=south] at ($(g c2r1.outer north)+(0,3mm)$) {\pgfplotslegendfromname{legcharge}};
+\plab{g c1r1}{a}\plab{g c2r1}{b}\plab{g c3r1}{c}\plab{g c1r2}{d}\plab{g c2r2}{e}\plab{g c3r2}{f}
+\end{tikzpicture}

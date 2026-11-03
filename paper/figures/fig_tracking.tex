@@ -1,0 +1,60 @@
+% Tracking a cell that ages during operation (v0.8, redesigned after review).
+% Data: data/trk_*.csv (M9 T1 = seed 0 "A", M10 T0 = seed 1 "B"; M10 Z1/Z2); data/trk_precv2.csv = read-outs before CV
+% (seed 1 values interpolated from the seed-1 trace at the seed-0 read-out times).
+\pgfplotsset{trk/.style={xmin=0, xmax=295, xtick={0,100,200}, xlabel={time (h)}},
+  rdA/.style={only marks, mark=*, mark size=1.5pt, mark options={fill=cGB, draw=white, line width=0.3pt}},
+  rdB/.style={only marks, mark=triangle*, mark size=1.9pt, mark options={fill=cBlu, draw=white, line width=0.3pt}},
+  trace/.style={cGB!45, line width=0.35pt}}
+\newcommand{\trkp}[5]{% #1 trace file key, #2 true key, #3 precv column stem, #4 ymin, #5 ymax
+  \fill[black!6] (axis cs:100,#4) rectangle (axis cs:295,#5);
+  \addplot[trace, forget plot] table[x=t, y=y, col sep=comma] {figures/data/trk_#1_A.csv};
+  \addplot[lref, forget plot] table[x=t, y=y, col sep=comma] {figures/data/trk_#2_true.csv};
+  \addplot[rdA, forget plot] table[x=t_h, y=#3_est_A, col sep=comma] {figures/data/trk_precv2.csv};
+}
+\begin{tikzpicture}
+% ---------------- row 1: the four estimates ----------------
+\begin{groupplot}[paper, trk, group style={group size=4 by 1, horizontal sep=14mm, group name=g},
+  width=29.5mm, height=25mm]
+\nextgroupplot[ymin=0, ymax=13, ytick={0,4,8,12}, ylabel={multiplier},
+  legend to name=legtrk, legend columns=3, legend style={/tikz/every even column/.append style={column sep=4mm}}]
+\trkp{Rf}{Rf}{Rf}{0}{13}
+\addlegendimage{lref}\addlegendimage{rdA}\addlegendimage{trace, line width=0.8pt}
+\legend{reference (truth), EKF read just before the CV phase, EKF at every step}
+\node[anchor=south east, font=\scriptsize, text=black!55, inner sep=1pt] at (axis cs:292,0.3) {held-out};
+\nextgroupplot[ymin=-0.01, ymax=0.3, ytick={0,0.1,0.2,0.3}, ylabel={fraction}, yticklabel style={/pgf/number format/fixed}]
+\trkp{LAM}{LAM}{LAM}{-0.01}{0.3}
+\nextgroupplot[ymin=-0.01, ymax=0.25, ytick={0,0.1,0.2}, ylabel={fraction}, yticklabel style={/pgf/number format/fixed}]
+\trkp{inv}{LLI}{inv}{-0.01}{0.25}
+\nextgroupplot[ymin=0.6, ymax=1.2, ytick={0.6,0.8,1,1.2}, ylabel={multiplier}, yticklabel style={/pgf/number format/fixed}]
+\trkp{Ds}{Ds}{Ds}{0.6}{1.2}
+\end{groupplot}
+\node[anchor=south] at ($(g c1r1.outer north west)!0.5!(g c4r1.outer north east)+(0,5.5mm)$) {\pgfplotslegendfromname{legtrk}};
+% ---------------- row 2: when to read, and why ----------------
+\coordinate (r2) at ($(g c1r1.south west)+(0,-17mm)$);
+\begin{scope}[shift={(r2)}]
+\begin{groupplot}[paper, group style={group size=2 by 1, horizontal sep=14mm, group name=h},
+  width=73mm, height=25mm, xmin=0.4, xmax=10.6, xtick={1,...,10}, xlabel={RPT}, /pgf/bar width=3pt]
+\nextgroupplot[anchor=north west,
+  ymin=-2, ymax=13, ytick={0,4,8,12}, ylabel={$R_{\mathrm{f}}$ error (\% of range)},
+  legend style={at={(0.02,0.98)}, anchor=north west, fill=white}, legend columns=1]
+\fill[red!8] (axis cs:0.4,3.9) rectangle (axis cs:10.6,13);
+\draw[red!60!black, line width=0.4pt, dashed] (axis cs:0.4,3.9) -- (axis cs:10.6,3.9);
+\draw[black!60, line width=0.3pt] (axis cs:0.4,0) -- (axis cs:10.6,0);
+\node[anchor=north east, font=\scriptsize, text=red!60!black, inner sep=1pt] at (axis cs:10.5,12.9) {fail};
+\node[anchor=north, font=\scriptsize, text=red!60!black, inner sep=1.5pt] at (axis cs:5,3.9) {allowed 3.9\,\%};
+\addplot[ybar, bar shift=-1.6pt, fill=cGB, draw=none, barleg] table[x=rpt, y=seed0_precv, col sep=comma] {figures/data/trk_rf.csv};
+\addplot[cRef, line width=0.6pt, mark=diamond*, mark size=1.8pt, dash pattern=on 2pt off 1pt] table[x=rpt, y=seed0_end, col sep=comma] {figures/data/trk_rf.csv};
+\addplot[ybar, bar shift=1.6pt, fill=cBlu, draw=none, barleg] table[x=rpt, y=seed1_precv, col sep=comma] {figures/data/trk_rf.csv};
+\legend{{before CV, seed 0}, {end of CV, seed 0}, {before CV, seed 1}}
+\nextgroupplot[ymin=-0.5, ymax=2.5, ytick={-0.5,0,0.5,1,1.5,2}, xmin=-0.6, xtick={0,...,10}, ylabel={voltage error (mV)},
+  yticklabel style={/pgf/number format/fixed}, legend style={at={(0.02,0.98)}, anchor=north west, fill=white}]
+\draw[black!60, line width=0.3pt] (axis cs:-0.6,0) -- (axis cs:10.6,0);
+\addplot[ybar, bar shift=-1.6pt, fill=cGre, draw=none, barleg] table[x=block, y=err_mean_mV_z1, col sep=comma] {figures/data/trk_z.csv};
+\addplot[ybar, bar shift=1.6pt, fill=cPur, draw=none, barleg] table[x=block, y=err_mean_mV_z2, col sep=comma] {figures/data/trk_z.csv};
+\legend{{true parameters, uniform film}, {true parameters, film as in the truth}}
+\end{groupplot}
+\end{scope}
+\newcommand{\ptit}[3]{\node[anchor=south west, font=\footnotesize, inner sep=0pt] at ($(#1.north west)+(0,1.4mm)$) {(#2) #3};}
+\ptit{g c1r1}{a}{film resistance $R_{\mathrm{f}}$}\ptit{g c2r1}{b}{active material lost}\ptit{g c3r1}{c}{lithium lost (inventory)}\ptit{g c4r1}{d}{diffusivity $D_{\mathrm{s}}$}
+\ptit{h c1r1}{e}{error of $R_{\mathrm{f}}$ at each RPT}\ptit{h c2r1}{f}{model voltage error in the CV phase}
+\end{tikzpicture}

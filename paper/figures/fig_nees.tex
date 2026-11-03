@@ -1,0 +1,18 @@
+% Consistency in the twin experiment: histogram of the time-averaged NEES per run. Data: data/nees_*.csv, nees_means.csv
+\begin{tikzpicture}
+\begin{groupplot}[paper, group style={group size=2 by 1, horizontal sep=7mm, group name=g, y descriptions at=edge left},
+  width=29mm, height=26mm, xmin=0, xmax=10, ymin=0, ymax=12, xtick={0,2,...,10}, xticklabels={0,2,4,6,8,${\geq}10$},
+  xlabel={NEES per run}, /pgf/bar width=2.6pt, legend style={at={(0.98,0.98)}, anchor=north east, fill=none}]
+\nextgroupplot[ylabel={runs}]
+\fill[black!8] (axis cs:1,0) rectangle (axis cs:3,12);
+\addplot[ybar, bar shift=-1.3pt, fill=cGB, draw=none, barleg] table[x=x, y=n, col sep=comma] {figures/data/nees_a_EKF.csv};
+\addplot[ybar, bar shift=1.3pt, fill=cSPMe, draw=none, barleg, postaction={pattern=north east lines, pattern color=white}] table[x=x, y=n, col sep=comma] {figures/data/nees_a_UKF.csv};
+\legend{EKF (2.21), UKF (11.2)}
+\nextgroupplot
+\fill[black!8] (axis cs:1,0) rectangle (axis cs:3,12);
+\addplot[ybar, fill=cGB, draw=none, barleg] table[x=x, y=n, col sep=comma] {figures/data/nees_b_EKF.csv};
+\legend{EKF (15.0)}
+\end{groupplot}
+\node[anchor=south west, font=\footnotesize, inner sep=0pt] at ($(g c1r1.north west)+(0,1.4mm)$) {(a) th2, mid-aged};
+\node[anchor=south west, font=\footnotesize, inner sep=0pt] at ($(g c2r1.north west)+(0,1.4mm)$) {(b) th1, fresh};
+\end{tikzpicture}

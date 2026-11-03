@@ -52,10 +52,10 @@ for i, (gr, ratio, nm, label) in enumerate(sel):
 w(pd.DataFrame(rows), "grid.csv")
 
 # ---- Fig. 4: cost versus N (4:1 grids): EKF with the converged closure, full UKF
-c = rd(SD, "fig_cost_m17.csv"); c4 = c[(c.grid.str.contains("4:1")) & (c.kind == "per chiamata")]
+c = rd(SD, "fig_cost_m17.csv"); c4 = c[(c.grid.str.contains("4:1")) & c.kind.isin(["per chiamata", "per call"])]
 e = c4[c4["filter"].str.startswith("EKF") & c4["filter"].str.contains("newton") & (c4.N <= 813)].sort_values("N")      # Fig. 4 spans N = 168..813; the 40/20/40 point of Table I is outside the plotted range
 w(pd.DataFrame({"series": "EKF", "grid": e.grid.values, "N_m": e.Nm.values, "state_dimension_N": e.N.values, "median_step_cost_ms": e.median_ms.values, "n_calls": e.n_calls.values}), "cost_EKF.csv")
-u = c4[c4["filter"].str.startswith("UKF k=1 completo") & ~c4["filter"].str.contains("alpha")].sort_values("N")
+u = c4[c4["filter"].str.contains("UKF") & c4["filter"].str.contains("completo|full") & ~c4["filter"].str.contains("alpha|chord")].sort_values("N")
 w(pd.DataFrame({"series": "UKF_full", "grid": u.grid.values, "N_m": u.Nm.values, "state_dimension_N": u.N.values, "median_step_cost_ms": u.median_ms.values, "n_calls": u.n_calls.values}), "cost_UKF_full.csv")
 
 # ---- Fig. 5: static Monte Carlo (points) and error budget (bars)

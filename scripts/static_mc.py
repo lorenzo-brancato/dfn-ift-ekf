@@ -95,7 +95,12 @@ def aggregate():
         if d is None: continue
         for _, r in d.iterrows():
             sc.append(dict(theta=tag, seed=int(r.seed), a_Rf_true_over_Rf0=r.Rf_true, a_Rf_estimated_over_Rf0=r.Rf_end, b_LAM_true=r.LAM_true, b_LAM_estimated=r.LAM_end, c_Ds_true_over_Ds0=r.Ds_true, c_Ds_estimated_over_Ds0=r.Ds_end))
-    cli.write_csv(pd.DataFrame(sc), args, os.path.join("source_data", "fig_mc.csv"), note="Fig. 5 a-c: final estimate vs true value (nominal fresh R_f and D_s = 1)", float_format="%.9g")
+    cli.write_csv(pd.DataFrame(sc), args, os.path.join("source_data", "fig_mc.csv"), note="Fig. 5 a-c: final estimate vs true value (nominal fresh R_f and D_s = 1)", float_format=None)
+    bb = []
+    for tag in ["th1", "th2", "th3", "th4", "th5"]:
+        b = read_bias(tag)
+        if b is not None: bb.append(dict(theta=tag, bias_Rf_pct=b.bias_Rf_pct, bias_LAM_pct=b.bias_LAM_pct, bias_Ds_pct=b.bias_Ds_pct))
+    if bb: cli.write_csv(pd.DataFrame(bb), args, os.path.join("tables", "bias.csv"), note="signed batch-fit bias, % of range", float_format=None)
     pd.set_option("display.width", 250); pd.set_option("display.max_columns", 40)
     print(tab[["theta", "filter", "runs", "Rf_p90", "Rf_rmse", "LAM_rmse", "Ds_p90", "Ds_rmse", "Ds_p90_minus_bias", "touch_edge_first60s"]].round(4).to_string())
 

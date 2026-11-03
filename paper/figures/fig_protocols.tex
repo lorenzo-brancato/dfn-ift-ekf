@@ -1,0 +1,58 @@
+% Current and reference voltage of the protocols. Data: data/prot_*.csv (reference simulations; th2 for F6Q and discharge, RPT 1 and the following ageing cycle).
+% Current plotted as C-rate (1C = 5 A), positive in discharge.
+\pgfplotsset{protI/.style={ymin=-3.6, ymax=3.6, ytick={-3,0,3}, yticklabels={$-3$,0,3}},
+  protV/.style={ymin=2.4, ymax=4.35, ytick={2.5,3,3.5,4}}}
+\begin{tikzpicture}
+\begin{groupplot}[paper, group style={group size=4 by 2, horizontal sep=5mm, vertical sep=3mm, group name=g, x descriptions at=edge bottom},
+  height=15mm, title style={font=\scriptsize, yshift=-1.2ex}]
+% ----- row 1: current -----
+\nextgroupplot[width=40mm, xmin=0, xmax=1.9, protI, ylabel={current (C-rate)}, title={(a) charge test (F6Q)}]
+\fill[black!6] (axis cs:0,-3.6) rectangle (axis cs:1.2,3.6);
+\draw[black!40, line width=0.3pt] (axis cs:0,0) -- (axis cs:1.9,0);
+\addplot[cBlu, line width=0.5pt, const plot] table[x=t_h, y expr=\thisrow{I_A}/5, col sep=comma] {figures/data/prot_F6Q_th2.csv};
+\node[anchor=north, font=\tiny, inner sep=1pt] at (axis cs:1.376,-1.05) {1C charge};
+\node[anchor=north east, font=\tiny, inner sep=1pt] at (axis cs:1.89,-2.1) {2C pulses};
+\nextgroupplot[width=32mm, xmin=0, xmax=1.5, protI, yticklabels={}, title={(b) discharge test}]
+\fill[black!6] (axis cs:0,-3.6) rectangle (axis cs:1.2,3.6);
+\draw[black!40, line width=0.3pt] (axis cs:0,0) -- (axis cs:1.5,0);
+\addplot[cBlu, line width=0.5pt, const plot] table[x=t_h, y expr=\thisrow{I_A}/5, col sep=comma] {figures/data/prot_F6_th2.csv};
+\node[anchor=north east, font=\tiny, inner sep=1pt, align=right] at (axis cs:1.49,-0.35) {1C, 2C, 3C\\pulses};
+\nextgroupplot[width=52mm, xmin=0, xmax=7.5, protI, yticklabels={}, title={(c) check-up (RPT 1)}]
+\fill[black!6] (axis cs:1.411,-3.6) rectangle (axis cs:2.009,3.6);
+\fill[cGB!10] (axis cs:2.512,-3.6) rectangle (axis cs:6.978,3.6);
+\draw[black!40, line width=0.3pt] (axis cs:0,0) -- (axis cs:7.5,0);
+\addplot[cBlu, line width=0.5pt, const plot] table[x=t_h, y expr=\thisrow{I_A}/5, col sep=comma] {figures/data/prot_RPT.csv};
+\node[anchor=north, font=\scriptsize, inner sep=1pt] at (axis cs:4.75,3.5) {slow C/2 segment};
+\node[anchor=south, font=\tiny, inner sep=1pt] at (axis cs:0.45,0.55) {C/2};
+\node[anchor=south, font=\tiny, inner sep=1pt] at (axis cs:2.9,0.55) {C/2 dis.};
+\node[anchor=north, font=\tiny, inner sep=1pt] at (axis cs:5.1,-0.6) {C/2 ch.};
+\node[anchor=north, font=\tiny, inner sep=1pt] at (axis cs:6.5,-0.6) {CV};
+\nextgroupplot[width=22mm, xmin=0, xmax=2.4, protI, yticklabels={}, title={(d) ageing cycle}]
+\draw[black!40, line width=0.3pt] (axis cs:0,0) -- (axis cs:2.4,0);
+\addplot[cBlu, line width=0.5pt, const plot] table[x=t_h, y expr=\thisrow{I_A}/5, col sep=comma] {figures/data/prot_P4.csv};
+\node[anchor=south, font=\tiny, inner sep=1pt] at (axis cs:0.47,0.55) {C/2};
+\node[anchor=north, font=\tiny, inner sep=1pt] at (axis cs:1.17,-1.05) {1C};
+\node[anchor=north, font=\tiny, inner sep=1pt] at (axis cs:1.8,-0.55) {CV};
+% ----- row 2: reference voltage -----
+\nextgroupplot[width=40mm, xmin=0, xmax=1.9, protV, ylabel={voltage (V)}, xlabel={time (h)}]
+\fill[black!6] (axis cs:0,2.4) rectangle (axis cs:1.2,4.35);
+\draw[red!60!black, line width=0.3pt, dash pattern=on 1.5pt off 1pt] (axis cs:0,4.2) -- (axis cs:1.9,4.2);
+\addplot[cRef, line width=0.5pt] table[x=t_h, y=V_V, col sep=comma] {figures/data/prot_F6Q_th2.csv};
+\node[anchor=south, font=\scriptsize, inner sep=1pt] at (axis cs:0.6,2.45) {estimation (P6L$\times$2)};
+\nextgroupplot[width=32mm, xmin=0, xmax=1.5, protV, yticklabels={}, xlabel={time (h)}]
+\fill[black!6] (axis cs:0,2.4) rectangle (axis cs:1.2,4.35);
+\draw[red!60!black, line width=0.3pt, dash pattern=on 1.5pt off 1pt] (axis cs:0,4.2) -- (axis cs:1.5,4.2);
+\addplot[cRef, line width=0.5pt] table[x=t_h, y=V_V, col sep=comma] {figures/data/prot_F6_th2.csv};
+\nextgroupplot[width=52mm, xmin=0, xmax=7.5, protV, yticklabels={}, xlabel={time (h)}]
+\fill[black!6] (axis cs:1.411,2.4) rectangle (axis cs:2.009,4.35);
+\fill[cGB!10] (axis cs:2.512,2.4) rectangle (axis cs:6.978,4.35);
+\draw[red!60!black, line width=0.3pt, dash pattern=on 1.5pt off 1pt] (axis cs:0,4.2) -- (axis cs:7.5,4.2);
+\addplot[cRef, line width=0.5pt] table[x=t_h, y=V_V, col sep=comma] {figures/data/prot_RPT.csv};
+\node[anchor=south, font=\scriptsize, inner sep=1pt] at (axis cs:1.71,2.42) {P6L};
+\draw[cGB, line width=0.6pt] (axis cs:5.97,2.4) -- (axis cs:5.97,4.35);
+\node[anchor=south east, font=\scriptsize, text=cGB, inner sep=1pt, align=right] at (axis cs:5.9,2.45) {read-out\\before CV};
+\nextgroupplot[width=22mm, xmin=0, xmax=2.4, protV, yticklabels={}, xlabel={time (h)}]
+\draw[red!60!black, line width=0.3pt, dash pattern=on 1.5pt off 1pt] (axis cs:0,4.2) -- (axis cs:2.4,4.2);
+\addplot[cRef, line width=0.5pt] table[x=t_h, y=V_V, col sep=comma] {figures/data/prot_P4.csv};
+\end{groupplot}
+\end{tikzpicture}

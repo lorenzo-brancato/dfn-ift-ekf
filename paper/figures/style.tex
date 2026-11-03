@@ -1,0 +1,44 @@
+% Common pgfplots style for the manuscript figures (v0.8).
+% Okabe--Ito palette; every series also differs in line style or marker (readable in greyscale).
+\usepgfplotslibrary{groupplots,fillbetween}
+\usetikzlibrary{plotmarks,patterns,calc,arrows.meta,positioning,decorations.pathreplacing}
+\pgfplotsset{compat=1.18}
+\definecolor{cRef}{HTML}{000000}
+\definecolor{cGB}{HTML}{D55E00}    % grey-box EKF (vermilion)
+\definecolor{cSPMe}{HTML}{56B4E9}  % SPMe UKF (sky blue)
+\definecolor{cOra}{HTML}{E69F00}
+\definecolor{cGre}{HTML}{009E73}
+\definecolor{cBlu}{HTML}{0072B2}
+\definecolor{cPur}{HTML}{CC79A7}
+\definecolor{cGrey}{HTML}{999999}
+\pgfplotsset{
+  paper/.style={
+    font=\footnotesize,
+    scale only axis,
+    axis line style={line width=0.4pt},
+    tick style={line width=0.4pt, black},
+    major tick length=2pt, minor tick length=1.2pt,
+    tick align=inside,
+    every tick label/.append style={font=\footnotesize},
+    label style={font=\footnotesize},
+    legend style={font=\footnotesize, draw=none, fill=white, fill opacity=0.85, text opacity=1,
+      inner sep=1pt, row sep=-1pt, cells={anchor=west}},
+    legend cell align=left,
+    /pgf/number format/1000 sep={},
+    enlargelimits=false,
+    clip mode=individual,
+    ylabel shift=-2pt, xlabel shift=-2pt,
+  },
+  lref/.style={cRef, line width=0.8pt},
+  lgb/.style={cGB, line width=0.8pt, dash pattern=on 3pt off 1.5pt},
+  lspme/.style={cSPMe, line width=1.1pt, dash pattern=on 0.9pt off 1.3pt},
+  panel/.style={
+    every axis title/.style={at={(0,1)}, anchor=south west, xshift=-1.8em, yshift=0pt, font=\footnotesize},
+  },
+}
+\newcommand{\ptag}[1]{\node[anchor=north east, font=\footnotesize, inner sep=2pt] at (rel axis cs:1,1) {#1};}
+% panel letter at the top-left corner of the named axis' outer box
+\newcommand{\plab}[2]{\node[anchor=south west, font=\footnotesize, inner sep=0pt] at ($(#1.outer north west |- #1.north)+(0,1.2mm)$) {(#2)};}
+\tikzset{zero/.style={cGrey, line width=0.3pt}, vmark/.style={cGrey, line width=0.3pt}}
+\pgfplotsset{barleg/.style={legend image code/.code={\fill[##1] (0cm,-0.07cm) rectangle (0.22cm,0.11cm);}},
+  lineleg/.style={legend image code/.code={\draw[##1] (0cm,0cm) -- (0.45cm,0cm);}}}
