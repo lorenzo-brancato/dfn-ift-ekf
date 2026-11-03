@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+results/
+data/
+*.npz
+*.pkl
+.venv/
+*.egg-info/
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.pdf
