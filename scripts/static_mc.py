@@ -2,7 +2,7 @@
 
 Five ageing states (th1..th5) x seeds 0-9. Truth = PyBaMM P6Lx2 reference (40/20/40 mesh, dt 0.5 s, 4320 s); measurement noise default_rng(seed) with sigma_V = 2 mV;
 initial offsets default_rng(200 + seed), +-40 % of the parameter range; EKF on (R_f, LAM, D_s) in logit coordinates, LLI fixed through the initial state.
-``--filter ukf`` runs the same experiment with the square-root UKF (``--ukf-iters`` Newton iterations of the closure at every sigma point; 1 = the 'full UKF' of the paper,
+``--filter ukf`` runs the same experiment with the square-root UKF (``--closure-iters`` Newton iterations of the closure at every sigma point; 1 = the 'full UKF' of the paper,
 ``conv`` = Newton to convergence at every sigma point). Per-run CSV: <results>/static_<ekf|ukf<k>>_<state>_s<seed>.csv, trajectories <results>/traj/*.npz.
 
 ``--aggregate`` writes <results>/tables/tab_mc_m17.csv and <results>/source_data/{fig_mc_m17.csv, fig_mc.csv}: p90 and RMSE of the final error (% of range), batch-fit bias
@@ -10,7 +10,7 @@ initial offsets default_rng(200 + seed), +-40 % of the parameter range; EKF on (
 Rows: EKF for the states found, and the UKF row for th2 if its runs are present.
 
   python scripts/static_mc.py --grid 4:1 --data data --results results --states th1 --seeds 0-9                  # one job: ~6 min per run, 1 thread
-  python scripts/static_mc.py --grid 4:1 --filter ukf --ukf-iters 1 --states th2 --seeds 0-9 ...                 # full UKF: ~45 min per run
+  python scripts/static_mc.py --grid 4:1 --filter ukf --closure-iters 1 --states th2 --seeds 0-9 ...                 # full UKF: ~45 min per run
   python scripts/bias.py --grid 4:1 ...; python scripts/static_mc.py --aggregate --results results
   python scripts/static_mc.py --quick
 """
@@ -21,7 +21,8 @@ from dfnekf import cli, runtime
 
 p = cli.parser("Fig. 5, Sec. III-B, Table V (RMSE)", "static-protocol Monte Carlo of the EKF / UKF against PyBaMM", seeds="0-9")
 p.add_argument("--filter", default="ekf", choices=["ekf", "ukf"])
-p.add_argument("--ukf-iters", default="1", help="Newton iterations of the closure per sigma point (integer) or 'conv'; UKF only")
+p.add_argument("--progress-chunk", type=int, default=0, help="UKF only: print the progress every N steps (0 = off). The chunked loop is compiled differently from the single scan and changes the NEES at the 1e-3 relative level, so runs meant to be compared must use the same setting")
+p.add_argument("--closure-iters", "--ukf-iters", dest="closure_iters", default="1", help="Newton iterations of the closure per sigma point (integer) or 'conv'; UKF only")
 p.add_argument("--redo", action="store_true", help="recompute runs whose CSV already exists (default: skip them)")
 p.add_argument("--aggregate", action="store_true", help="build the tables from the per-run files in --results")
 args = p.parse_args()
@@ -29,7 +30,7 @@ runtime.setup(args.core)
 import numpy as np, pandas as pd
 from dfnekf.montecarlo import RANGE_W, QUICK_STEPS, ci95, p90, parse_iters, iters_label
 
-ITERS = parse_iters(args.ukf_iters)
+ITERS = parse_iters(args.closure_iters)
 FILT_TAG = "ekf" if args.filter == "ekf" else f"ukf{iters_label(ITERS)}"
 COORDS = ("Rf", "LAM", "Ds")
 EKF_LABEL, UKF_LABEL = "EKF", "UKF k=1 completo"          # row labels of the published tables (kept so that the source data files are identical)
@@ -48,7 +49,7 @@ def run_jobs():
             if case is None:
                 case = Case(tag, args.grid, twin=False, data_dir=args.data)
                 if args.quick: truncate(case, QUICK_STEPS)
-            res, out = run_one(case, args.filter, i, closure_iters=ITERS)
+            res, out = run_one(case, args.filter, i, closure_iters=ITERS, chunk=args.progress_chunk)
             cli.write_csv(pd.DataFrame([res]), args, name + ".csv", note="static protocol vs PyBaMM, one run")
             os.makedirs(os.path.join(args.results, "traj"), exist_ok=True); np.savez(os.path.join(args.results, "traj", name + ".npz"), **out)
             print(name, {k: (round(float(v), 3) if isinstance(v, (float, np.floating)) else v) for k, v in res.items() if k in ("Rf_err_pct", "LAM_err_pct", "Ds_err_pct", "finite", "cpu_s")}, flush=True)

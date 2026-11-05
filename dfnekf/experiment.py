@@ -103,6 +103,8 @@ def summarize(case, filt, i, th0, H, wall, name_extra=""):
         eta = np.asarray(H["eta"]); res["eta_rms_mV"] = float(1e3 * np.sqrt(np.mean((eta - case.eta_ref()) ** 2)))
     # serie salvate
     out = dict(vals=v, nees=nees)
+    if "resMax" in H:
+        out["resMax"] = np.asarray(H["resMax"]); res.update(resSigma_max=float(np.max(H["resMax"])), resSigma_median=float(np.median(H["resMax"])), resSigma_p99=float(np.quantile(H["resMax"], .99)))
     if "nees2" in H: out["nees2"] = np.asarray(H["nees2"])
     if "Pc" in H: out["Pc"] = np.asarray(H["Pc"])
     if "sd_vals" in H: out["sd_vals"] = np.asarray(H["sd_vals"])

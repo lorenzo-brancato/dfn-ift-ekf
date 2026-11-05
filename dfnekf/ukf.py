@@ -4,6 +4,7 @@ Scaled unscented transform with alpha = 1, kappa = 0, beta = 2 (weights >= 0). O
 sigma points of the posterior. The kinetics closure is solved at every sigma point by ``closure_iters`` full Newton iterations started from the converged
 solution at the mean point (``None``: Newton to convergence with line search, tol 1e-10, the criterion of the EKF).
 """
+import time
 import numpy as np
 import jax, jax.numpy as jnp
 import jax.scipy.linalg as jsl
@@ -40,7 +41,7 @@ class UKF:
         cc, a, s, ce = m.split(z); z = m.join(cc, a, s, jnp.maximum(ce, 20.0)); csn, csp, ce_ = m.surf(z)
         return m.A.solve_robust(g_prev, csn, csp, ce_, I, th, tol=1e-10)[0]
 
-    def run(self, x0, P0d, Qd, R, Iseq, y, x_true=None, return_step=False):
+    def run(self, x0, P0d, Qd, R, Iseq, y, x_true=None, return_step=False, chunk=None, progress=None):
         n, nz, nth = self.n, self.nz, self.ek.nth
         m = self.m; nel = m.nel
         scale = jnp.asarray(np.concatenate([np.full(nel, 1000.0), np.full(m.Nm * nel, 100.0), np.full(m.K * nel, 100.0), np.full(m.N, 100.0), np.full(nth, 0.5)]))
@@ -72,7 +73,7 @@ class UKF:
             c_up = x0[nz:] + scale[nz:] * u_up[nz:]
             Pc = (S_up @ S_up.T)[nz:, nz:] * (scale[nz:, None] * scale[None, nz:])
             Em = jnp.sum(Wm[:, None] * Et, 0)
-            out = dict(vals=self.ek.val_of(c_up), c=c_up, Pc=Pc, innov=innov, Vpred=zhat, resF=Rs[0], eta=Em[0], ppl=Em[1], ce_min=Em[2])
+            out = dict(vals=self.ek.val_of(c_up), c=c_up, Pc=Pc, innov=innov, Vpred=zhat, resF=Rs[0], resMax=jnp.max(Rs), eta=Em[0], ppl=Em[1], ce_min=Em[2])
             if xt is not None:
                 e = u_up[nz:] - inp[2][nz:]; Ps = Pc / (scale[nz:, None] * scale[None, nz:]); out["nees"] = e @ jnp.linalg.solve(Ps, e)
                 i2 = [i for i, c_ in enumerate(self.ek.coords) if c_ in ("Rf", "Ds")]
@@ -82,5 +83,12 @@ class UKF:
         if return_step:
             return step, (jnp.zeros(n), S0, g0)
         inp = (Iseq, jnp.asarray(y)) + (() if xt is None else (xt,))
-        _, H = jax.lax.scan(step, (jnp.zeros(n), S0, g0), inp)
-        return H
+        if chunk is None:
+            _, H = jax.lax.scan(step, (jnp.zeros(n), S0, g0), inp)
+            return H
+        # chunked scan (same step function, same carry): lets a long run report its progress; not to be called under jit
+        scan_c = jax.jit(lambda c, xs: jax.lax.scan(step, c, xs)); carry = (jnp.zeros(n), S0, g0); Hs = []; N = len(inp[0]); t0 = time.time()
+        for a in range(0, N, chunk):
+            carry, Hc = scan_c(carry, tuple(v[a:a + chunk] for v in inp)); jax.block_until_ready(Hc["vals"]); Hs.append(Hc)
+            if progress is not None: progress(min(a + chunk, N), N, Hc, time.time() - t0)
+        return {k: jnp.concatenate([h[k] for h in Hs]) for k in Hs[0]}

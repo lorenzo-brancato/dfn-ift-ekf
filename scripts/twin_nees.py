@@ -2,7 +2,7 @@
 
 The truth is the grey-box model itself (``Case(twin=True)``, noise-free ROM voltage at the true parameters) plus 2 mV noise, so any inconsistency is due to the filter,
 not to model error. Seeds 0-19 by default. NEES of (R_f, D_s) (2 dof, logit coordinates, covariance block of the filter), averaged over the steps of each run.
-Filters: EKF, or ``--filter ukf`` (square-root UKF, ``--ukf-iters`` Newton iterations of the closure per sigma point, 1 = the 'full UKF' of the paper, ``conv`` = to convergence).
+Filters: EKF, or ``--filter ukf`` (square-root UKF, ``--closure-iters`` Newton iterations of the closure per sigma point, 1 = the 'full UKF' of the paper, ``conv`` = to convergence).
 Appendix D variants (run on th1; use the same --results folder, file names carry the variant):
   --grid uniform           uniform electrode grid (the 15.08 vs 14.97 comparison)
   --p0-scale-rf 2          initial standard deviation of R_f doubled (variance x4)     -> 'wider initial covariance'
@@ -13,7 +13,7 @@ Per-run CSV: <results>/twin_<ekf|ukf<k>>[_uniform][_p0rf<s>][_relinit]_<state>_s
 static_mc.py and <results>/tables/tab_cost_jax_m17.csv if present), tab_appD.csv (numbers of Appendix D); in <results>/source_data: fig_nees.csv (Fig. 6), fig_nees_m17.csv.
 
   python scripts/twin_nees.py --grid 4:1 --states th1,th2 --seeds 0-19 --results results                   # EKF, ~6 min per run
-  python scripts/twin_nees.py --grid 4:1 --filter ukf --ukf-iters 1 --states th2 --seeds 0-19 ...          # full UKF, ~46 min per run
+  python scripts/twin_nees.py --grid 4:1 --filter ukf --closure-iters 1 --states th2 --seeds 0-19 ...          # full UKF, ~46 min per run
   python scripts/twin_nees.py --grid 4:1 --states th1 --p0-scale-rf 2 ...;  --init-error relative ...;  --grid uniform --states th1 ...
   python scripts/twin_nees.py --aggregate --results results
   python scripts/twin_nees.py --quick
@@ -25,7 +25,8 @@ from dfnekf import cli, runtime
 
 p = cli.parser("Fig. 6, Table V, Appendix D", "twin experiments: NEES consistency of the EKF and of the full UKF", seeds="0-19", states="th1,th2")
 p.add_argument("--filter", default="ekf", choices=["ekf", "ukf"])
-p.add_argument("--ukf-iters", default="1", help="Newton iterations of the closure per sigma point (integer) or 'conv'; UKF only")
+p.add_argument("--progress-chunk", type=int, default=0, help="UKF only: print the progress every N steps (0 = off). The chunked loop is compiled differently from the single scan and changes the NEES at the 1e-3 relative level, so runs meant to be compared must use the same setting")
+p.add_argument("--closure-iters", "--ukf-iters", dest="closure_iters", default="1", help="Newton iterations of the closure per sigma point (integer) or 'conv'; UKF only")
 p.add_argument("--p0-scale-rf", type=float, default=1.0, help="factor on the initial standard deviation of R_f (2 = wider initial covariance)")
 p.add_argument("--init-error", default="absolute", choices=["absolute", "relative"], help="initial R_f error: +-40 %% of the range, or relative to the true value")
 p.add_argument("--redo", action="store_true", help="recompute runs whose CSV already exists (default: skip them)")
@@ -36,7 +37,7 @@ runtime.setup(args.core)
 import numpy as np, pandas as pd
 from dfnekf.montecarlo import QUICK_STEPS, ci95, p90, parse_iters, iters_label
 
-ITERS = parse_iters(args.ukf_iters)
+ITERS = parse_iters(args.closure_iters)
 STATIC = args.static_results or args.results
 RANGE_W = {"Rf": 9.0, "LAM": 0.3, "Ds": 0.7}
 
@@ -62,7 +63,7 @@ def run_jobs():
             if case is None:
                 case = Case(tag, args.grid, twin=True, data_dir=args.data)
                 if args.quick: truncate(case, QUICK_STEPS)
-            res, out = run_one(case, args.filter, i, closure_iters=ITERS, p0_scale_rf=args.p0_scale_rf, init_error=args.init_error)
+            res, out = run_one(case, args.filter, i, closure_iters=ITERS, p0_scale_rf=args.p0_scale_rf, init_error=args.init_error, chunk=args.progress_chunk)
             res.update(p0_scale_rf=args.p0_scale_rf, init_error=args.init_error)
             cli.write_csv(pd.DataFrame([res]), args, name + ".csv", note="twin experiment, one run")
             os.makedirs(os.path.join(args.results, "traj"), exist_ok=True); np.savez(os.path.join(args.results, "traj", name + ".npz"), **out)

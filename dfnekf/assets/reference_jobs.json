@@ -1420,5 +1420,39 @@
 ],
 "period": 1.0,
 "var_transport": true
+},
+{
+"proto": "P1_3C",
+"tag": "nom",
+"theta": [
+1,
+0,
+0,
+1
+],
+"mesh": [
+20,
+10,
+20
+],
+"period": 1.0,
+"grid_ratio": 4.0
+},
+{
+"proto": "P2",
+"tag": "nom",
+"theta": [
+1,
+0,
+0,
+1
+],
+"mesh": [
+20,
+10,
+20
+],
+"period": 1.0,
+"grid_ratio": 4.0
 }
 ]

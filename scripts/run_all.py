@@ -7,7 +7,7 @@
 Stages (in order): refs, ageing_ref, model, static, protocols, twin, closure_train, closure, ageing, ukf, timing, aggregate. 'ageing' only needs 'ageing_ref'
 and contains the two longest jobs (13-14 h each): start it in a second runner next to the rest, e.g. --stage ageing --procs 3 and --stage model,static,protocols,twin,closure_train,closure --procs 3.
 A job is skipped if its marker file ``<results>/.done/<job>`` exists, so an interrupted run resumes where it stopped.
-The ``ukf`` stage (full unscented filter, the longest) and the ``timing`` stage (cost measurements, which need an otherwise idle machine) are only run when named.
+The ``ukf`` stage (full unscented filter, the longest), the ``ukf_pilot`` stage (4 runs at 4 closure iterations) and the ``timing`` stage (cost measurements, which need an otherwise idle machine) are only run when named.
 Outputs: ``<results>/4to1`` (main), logs in ``<results>/logs``.
 """
 import argparse
@@ -29,7 +29,7 @@ def job(name, script, *args, procs=1, stage=None):
 def stages(a):
     R, D = os.path.join(a.results, "4to1"), a.data
     g = ["--grid", "4:1", "--data", D, "--results", R]
-    jobs = {s: [] for s in ["refs", "ageing_ref", "model", "static", "protocols", "twin", "closure_train", "closure", "ageing", "ukf", "timing", "aggregate"]}
+    jobs = {s: [] for s in ["refs", "ageing_ref", "model", "static", "protocols", "twin", "closure_train", "closure", "ageing", "ukf", "ukf_pilot", "timing", "aggregate"]}
     jobs["refs"].append(dict(name="references", argv=[PY, "-m", "dfnekf.reference", "standard", "--workers", "4", "--data", D], procs=4))
     jobs["ageing_ref"].append(job("ageing_reference", "ageing_reference", *g))
     # model-level checks, grid study, CRLB, model bias
@@ -63,8 +63,12 @@ def stages(a):
     jobs["ageing"].append(job("protocols_fig", "protocols_fig", "--data", D, "--results", R))
     # full unscented filter: closure iterations per sigma point as decided (default: 1)
     it = str(a.ukf_iters)
-    jobs["ukf"] += [job(f"ukf_twin_{i}", "twin_nees", *g, "--filter", "ukf", "--ukf-iters", it, "--states", "th2", "--seeds", str(i)) for i in range(20)]
-    jobs["ukf"] += [job(f"ukf_static_{i}", "static_mc", *g, "--filter", "ukf", "--ukf-iters", it, "--states", "th2", "--seeds", str(i)) for i in range(10)]
+    jobs["ukf"] += [job(f"ukf_twin_{i}", "twin_nees", *g, "--filter", "ukf", "--closure-iters", it, "--states", "th2", "--seeds", str(i)) for i in range(20)]
+    jobs["ukf"] += [job(f"ukf_static_{i}", "static_mc", *g, "--filter", "ukf", "--closure-iters", it, "--states", "th2", "--seeds", str(i)) for i in range(10)]
+    # pilot: four twin runs of the full UKF with 4 closure iterations per sigma point (a result of its own; about 8.7 h CPU each)
+    P = os.path.join(a.results, "ukf_pilot_k4")
+    jobs["ukf_pilot"] += [job(f"ukf_pilot_{i}", "ukf_pilot", "--grid", "4:1", "--data", D, "--results", P, "--seeds", str(i)) for i in (0, 3, 14, 5)]
+    jobs["ukf_pilot"].append(job("ukf_pilot_agg", "ukf_pilot", "--results", P, "--seeds", "0,3,14,5", "--aggregate", "--k1", R))
     # timings: idle machine, one job at a time (the runner forces procs = 6 for these so that nothing else runs)
     jobs["timing"] += [dict(name="cost_4to1", argv=[PY, "scripts/cost.py", "--grid", "4:1", "--data", D, "--results", R, "--core", "2"], procs=6),
                        dict(name="cost_uniform", argv=[PY, "scripts/cost.py", "--grid", "uniform", "--data", D, "--results", R, "--core", "2"], procs=6),
@@ -105,12 +109,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stage", default=None, help="stage name, comma-separated list, or 'all'"); ap.add_argument("--procs", type=int, default=6)
     ap.add_argument("--data", default="data"); ap.add_argument("--results", default="results"); ap.add_argument("--list", action="store_true")
-    ap.add_argument("--ukf-iters", default="1", help="Newton iterations per sigma point of the full UKF (1 = as in the manuscript; 'conv' = to convergence)")
+    ap.add_argument("--closure-iters", "--ukf-iters", dest="ukf_iters", default="1", help="Newton iterations per sigma point of the full UKF (1 = as in the manuscript; 'conv' = to convergence)")
     a = ap.parse_args(); J = stages(a)
     if a.list or not a.stage:
         for s, js in J.items(): print(f"{s:11s} {len(js):3d} jobs: " + ", ".join(j["name"] for j in js)[:300])
         sys.exit(0)
-    names = [s for s in J if s not in ("ukf", "timing")] if a.stage == "all" else a.stage.split(",")
+    names = [s for s in J if s not in ("ukf", "ukf_pilot", "timing")] if a.stage == "all" else a.stage.split(",")
     bad = 0
     for s in names:
         print(f"=== stage {s}", flush=True); bad += run(J[s], a.procs, a.results)
