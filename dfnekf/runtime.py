@@ -1,7 +1,7 @@
 """Process setup shared by the entry points: single-threaded numerics and optional CPU pinning, portable across Linux, macOS and Windows.
 
-``single_thread()`` must be called before ``import jax`` (it sets environment variables read at import time). ``pin_to_core`` is optional:
-it is used for the timing measurements and for the long runs, and does nothing (returns False) where the operating system has no affinity call (macOS).
+``single_thread()`` must be called before ``import jax`` (it sets environment variables read at import time). ``pin_to_core`` is optional and must NOT be used for timings (XLA helper threads share the pinned core: the step at N = 653 doubles, 15.6 ms instead of 7.0 ms):
+it can be used for long accuracy runs (not for timings), and does nothing (returns False) where the operating system has no affinity call (macOS).
 """
 import os
 import sys

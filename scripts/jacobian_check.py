@@ -21,7 +21,7 @@ Output (one file per part, the timing parts can be run separately with --parts):
 
 Commands:
   python scripts/jacobian_check.py --grid 4:1 --parts agreement --results results                      (minutes)
-  python scripts/jacobian_check.py --grid 4:1 --parts cost,step --n-calls 3600 --n-jac 100 --core 2 --results results      (idle machine; about 10 min)
+  python scripts/jacobian_check.py --grid 4:1 --parts cost,step --n-calls 3600 --n-jac 100 --results results      (idle machine; about 10 min)
   python scripts/jacobian_check.py --aggregate --results results
   python scripts/jacobian_check.py --quick --results /tmp/jac_quick
 """

@@ -3,21 +3,21 @@
 Medians (and p99, p99.9, worst) of the wall time of ONE call of the jitted step (Python dispatch included), one CPU thread, fixed input I = 5 A, y = 3.7 V:
   * EKF (structured, converged closure with warm start and cold fallback = the filter of the paper) and, for comparison, the EKF with a cold-started closure,
     >= 3600 calls per point; plus the amortized cost of 1000 steps inside one lax.scan at N = 653 (a mean, not a median);
-  * the full UKF (the closure Newton-iterated --ukf-iters times at every sigma point, 1 as in the manuscript; 'none' = converged), 100 calls per point;
+  * the full UKF (the closure Newton-iterated --closure-iters times at every sigma point, 1 as in the manuscript; 'none' = converged), 100 calls per point;
   * the UKF on the SPMe (N = 50 and 83), 600 calls.
 Points: grids 10/5/10 with N_m = 4, 8, 12 (N = 168, 248, 328), 20/10/20 with N_m = 8, 12, 16 (N = 493, 653, 813) and 40/20/40 with N_m = 16 (N = 1623, EKF only), for the grid given by
 --grid (4:1 -> file costgrid_4.csv; uniform -> costgrid_none.csv; Fig. 4 uses the 4:1 file, Table I the uniform one). Re-running a point replaces its rows in the file (the points can be timed one after the other).
 
-THE TIMINGS ARE ONLY MEANINGFUL ON AN OTHERWISE IDLE MACHINE: close everything else, use --core to pin the process to one core, and run one timing process at a time. The script prints a warning
+THE TIMINGS ARE ONLY MEANINGFUL ON AN OTHERWISE IDLE MACHINE: close everything else, do NOT pin the process to a core (--core doubles the step at N >= 653 because the XLA helper threads then share the core), and run one timing process at a time. The script prints a warning
 and records the number of other busy processes (needs psutil; skipped if it is not installed) and the machine description in <results>/cost_meta.csv.
 
 Output: <results>/costgrid_<4|none>.csv with columns filter, grid, Nm, N, kind, median_ms, p99_ms, p999_ms, worst_ms, n_calls, note.
 --aggregate writes <results>/tables/tab_cost_jax_m17.csv and <results>/source_data/fig_cost_m17.csv (both grids).
 
 Commands (about 45 min per grid on the machine of the paper):
-  python scripts/cost.py --grid 4:1 --core 2 --results results
-  python scripts/cost.py --grid uniform --core 2 --results results
-  python scripts/cost.py --grid 4:1 --points 20/10/20:12 --ukf-iters none --results results      (other UKF closure iterations; the file name gets a suffix)
+  python scripts/cost.py --grid 4:1 --results results
+  python scripts/cost.py --grid uniform --results results
+  python scripts/cost.py --grid 4:1 --points 20/10/20:12 --closure-iters none --results results      (other UKF closure iterations; the file name gets a suffix)
   python scripts/cost.py --aggregate --results results
   python scripts/cost.py --quick --results /tmp/cost_quick
 """
@@ -48,7 +48,7 @@ def main():
     p.add_argument("--points", default=None, help="comma-separated 'n/n/n:N_m' (default: the seven points of the paper)")
     p.add_argument("--parts", default="ekf,ukf,spme", help="comma-separated subset of ekf, ukf, spme")
     p.add_argument("--n-ekf", type=int, default=3600); p.add_argument("--n-ukf", type=int, default=100); p.add_argument("--n-spme", type=int, default=600)
-    p.add_argument("--ukf-iters", default="1", help="Newton iterations of the closure at every sigma point (1 in the paper; 'none' = converged)")
+    p.add_argument("--closure-iters", "--ukf-iters", dest="ukf_iters", default="1", help="Newton iterations of the closure at every sigma point (1 in the paper; 'none' = converged)")
     p.add_argument("--aggregate", action="store_true")
     a = p.parse_args()
     if a.aggregate: return aggregate(a)

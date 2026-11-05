@@ -36,7 +36,7 @@ def other_busy_processes(threshold=5.0, interval=1.0):
 def idle_warning(n_other=None):
     """Print the reminder that timings are only meaningful on an idle machine; returns the number of busy processes (None if unknown)."""
     if n_other is None: n_other = other_busy_processes()
-    print("WARNING: timings are valid only on an otherwise idle machine, with one thread (use --core to pin the process).", flush=True)
+    print("WARNING: timings are valid only on an otherwise idle machine, with one thread (one thread; do not pin the process to a core: XLA helper threads share the core and the step doubles).", flush=True)
     if n_other is None: print("  (psutil is not installed: the number of other busy processes was not recorded)", flush=True)
     elif n_other > 0: print(f"  {n_other} other process(es) use more than 5 % of a core right now: the timings below are NOT reliable", flush=True)
     else: print("  no other busy process detected", flush=True)

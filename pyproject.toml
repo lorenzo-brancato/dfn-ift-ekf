@@ -19,6 +19,7 @@ dependencies = [
     "pandas==3.0.6",
     "optax==0.2.8",
     "pybamm==26.9.0.0",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
