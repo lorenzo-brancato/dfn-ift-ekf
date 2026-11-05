@@ -70,10 +70,10 @@ def stages(a):
     jobs["ukf_pilot"] += [job(f"ukf_pilot_{i}", "ukf_pilot", "--grid", "4:1", "--data", D, "--results", P, "--seeds", str(i)) for i in (0, 3, 14, 5)]
     jobs["ukf_pilot"].append(job("ukf_pilot_agg", "ukf_pilot", "--results", P, "--seeds", "0,3,14,5", "--aggregate", "--k1", R))
     # timings: idle machine, one job at a time (the runner forces procs = 6 for these so that nothing else runs)
-    jobs["timing"] += [dict(name="cost_4to1", argv=[PY, "scripts/cost.py", "--grid", "4:1", "--data", D, "--results", R, "--core", "2"], procs=6),
-                       dict(name="cost_uniform", argv=[PY, "scripts/cost.py", "--grid", "uniform", "--data", D, "--results", R, "--core", "2"], procs=6),
-                       dict(name="jacobian_cost", argv=[PY, "scripts/jacobian_check.py", *g, "--parts", "cost,step", "--n-calls", "3600", "--n-jac", "100", "--core", "2"], procs=6),
-                       dict(name="closure_cost", argv=[PY, "scripts/closure_ablation.py", *g, "--cost", "--core", "2"], procs=6)]
+    jobs["timing"] += [dict(name="cost_4to1", argv=[PY, "scripts/cost.py", "--grid", "4:1", "--data", D, "--results", R], procs=6),
+                       dict(name="cost_uniform", argv=[PY, "scripts/cost.py", "--grid", "uniform", "--data", D, "--results", R], procs=6),
+                       dict(name="jacobian_cost", argv=[PY, "scripts/jacobian_check.py", *g, "--parts", "cost,step", "--n-calls", "3600", "--n-jac", "100"], procs=6),
+                       dict(name="closure_cost", argv=[PY, "scripts/closure_ablation.py", *g, "--cost"], procs=6)]
     # aggregation: every script writes its tables and source data, then the figure data
     agg = [("static_mc", []), ("twin_nees", ["--static-results", R]), ("charge", []), ("discharge", []), ("closure_ablation", []), ("grid_study", []), ("cost", []), ("crlb", []), ("jacobian_check", [])]
     jobs["aggregate"] += [job(f"agg_{s}", s, *g, "--aggregate", *x) for s, x in agg]

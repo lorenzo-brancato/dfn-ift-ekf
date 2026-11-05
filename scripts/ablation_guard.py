@@ -36,6 +36,33 @@ def first_error(d, P, at, limit=20.0, after_h=2.0):
     return float(k[np.argmax(bad)] * at.DT / 3600) if bad.any() else float("nan")
 
 
+def exit_times(d, P, at, after_h=2.0):
+    """When the estimate violates the acceptance criteria, per parameter (R_f, LAM, D_s, LLI), after ``after_h`` hours (the initial transient is excluded):
+    first time the error exceeds 10 % / 20 % of the ageing range, or the estimate leaves the physical (ageing) range, and the 'sustained' time (the criterion then stays violated to the end of the run;
+    the definition of the first ageing study). NaN = never. Columns ``first_<crit>_<param>_h`` and ``sustained_<crit>_<param>_h``, crit in err10, err20, range."""
+    import numpy as np
+    v = d["vals"]; k = np.minimum(np.arange(len(v)) * 20, len(P["Rf"]) - 1); t = k * at.DT / 3600; late = t >= after_h; out = {}
+    for i, c in enumerate(list(d["coords"])):
+        lo, hi = at.RANGE[c]; err = 100 * np.abs(v[:, i] - at.true_value(P, c, k)) / (hi - lo)
+        for crit, bad in (("err10", err > 10.0), ("err20", err > 20.0), ("range", (v[:, i] < lo) | (v[:, i] > hi))):
+            m = bad & late; out[f"first_{crit}_{c}_h"] = float(t[np.argmax(m)]) if m.any() else float("nan")
+            stay = (np.flip(np.cumprod(np.flip(bad | ~late).astype(int))) > 0) & late
+            out[f"sustained_{crit}_{c}_h"] = float(t[np.argmax(stay)]) if stay.any() else float("nan")
+    return out
+
+
+def guarded_row_from_tracker(a, seed, P, hours):
+    """The guarded half of the pair taken from the full tracker run of ``ageing_track.py`` (same noise seed, same everything, guard on): the first ``hours`` of its trajectory.
+    Used instead of running the guarded tracker a second time over a long window. max_resF is not available at this resolution (NaN)."""
+    import numpy as np
+    from dfnekf import ageing_tracker as at
+    d = dict(np.load(os.path.join(a.guarded_from, "traj", f"ageing_track_seed{seed}.npz"))); n = int(round(hours * 3600 / at.DT)); nv = int(np.ceil(n / 20))
+    d["vals"] = d["vals"][:nv]
+    r = dict(seed=seed, guard=True, simulated_h=hours, breakdown=int(d["breakdown"]) >= 0, breakdown_h=float("nan"), n_rejected=int(d["ps_rejected"][:n].sum()), max_resF=float("nan"),
+             n_nonfinite=int((~np.all(np.isfinite(d["vals"]), axis=1)).sum()), source="ageing_track.py trajectory")
+    r.update(first_error_gt_20pct_h=first_error(d, P, at)); r.update(exit_times(d, P, at)); return r
+
+
 def run_pair(a, seed, P):
     import numpy as np
     from dfnekf import ageing_tracker as at
@@ -45,16 +72,19 @@ def run_pair(a, seed, P):
     at.save_run(os.path.join(a.results, "traj", f"ablation_guard_seed{seed}_noguard.npz"), d0)
     bd = int(d0["breakdown"])
     n_g = min(len(tr0.t), bd + int(a.margin_hours * 3600 / at.DT)) if bd >= 0 else cap
-    tr1 = at.Tracker(P, a.grid, seed=seed, guard=True, nsteps=n_g)
-    d1 = at.track(tr1, stop_on_breakdown=False, chunk=chunk)
-    at.save_run(os.path.join(a.results, "traj", f"ablation_guard_seed{seed}_guard.npz"), d1)
-    for guard, d, tr in [(False, d0, tr0), (True, d1, tr1)]:
+    runs = [(False, d0, tr0)]
+    if not a.guarded_from:
+        tr1 = at.Tracker(P, a.grid, seed=seed, guard=True, nsteps=n_g)
+        d1 = at.track(tr1, stop_on_breakdown=False, chunk=chunk)
+        at.save_run(os.path.join(a.results, "traj", f"ablation_guard_seed{seed}_guard.npz"), d1); runs.append((True, d1, tr1))
+    for guard, d, tr in runs:
         bd_ = int(d["breakdown"])
         r = dict(seed=seed, guard=guard, simulated_h=float(len(d["ps_innov"])) * at.DT / 3600, breakdown=bd_ >= 0, breakdown_h=tr.t[bd_] / 3600 if bd_ >= 0 else float("nan"),
                  n_rejected=int(d["n_rejected"].sum()), max_resF=float(np.max(d["resF_max"])), n_nonfinite=int(d["n_nonfinite"].sum()))
-        r.update(first_error_gt_20pct_h=first_error(d, P, at))
+        r.update(first_error_gt_20pct_h=first_error(d, P, at)); r.update(exit_times(d, P, at))
         for k in ("non_finite", "resF", "F_next") + at.VIOL: r["first_" + k + "_h"] = tr.t[int(d["first_" + k])] / 3600 if "first_" + k in d else float("nan")
         rows.append(r)
+    if a.guarded_from: rows.append(guarded_row_from_tracker(a, seed, P, rows[0]["simulated_h"]))
     return rows
 
 
@@ -88,6 +118,7 @@ def main():
     p.add_argument("--margin-hours", type=float, default=1.0, help="the guarded run goes this far beyond the breakdown time of the unguarded one")
     p.add_argument("--chunk", type=int, default=5000); p.add_argument("--tracking", default="results/ageing"); p.add_argument("--static", default=None)
     p.add_argument("--ref", default=None)
+    p.add_argument("--guarded-from", default=None, help="results folder of ageing_track.py: take the guarded half of the pair from its trajectory (first N hours) instead of running it again")
     a = p.parse_args()
     runtime.setup(a.core)
     if a.aggregate: return aggregate(a)
