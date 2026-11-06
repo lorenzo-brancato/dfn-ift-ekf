@@ -1,5 +1,5 @@
-"""Chen2020 a parametri costanti (D_e, kappa, t+ costanti) con theta applicabili.
-Unica fonte dei numeri: PyBaMM 'Chen2020' (valori estratti a runtime, vedi dump_params_csv)."""
+"""Chen2020 with constant parameters (constant D_e, kappa, t+) and applicable theta multipliers.
+Single source of the numbers: PyBaMM 'Chen2020' (values extracted at run time, see dump_params_csv)."""
 import numpy as np
 
 F = 96485.33212
@@ -8,11 +8,11 @@ T = 298.15
 A_CELL = 0.065 * 1.58          # Electrode height x width [m2]
 C_RATE_A = 5.0                 # 1C = 5 A (Nominal cell capacity)
 
-# range di aging (adimensionali rispetto al nominale)
+# ageing range (dimensionless, relative to the nominal value)
 THETA_NOM = dict(Rf=1.0, as_=1.0, Ds=1.0)
 RANGE = dict(Rf=(1.0, 10.0), Ds=(0.3, 1.0))
 
-# SOC 50 % (da PyBaMM initial_soc=0.5, DFN Chen2020)
+# SOC 50 % (from PyBaMM initial_soc=0.5, DFN Chen2020)
 C0_N_50, C0_P_50 = 15522.211404385791, 35269.4534602329
 # SOC 100 % (default Chen2020)
 C0_N_100, C0_P_100 = 29866.0, 17038.0

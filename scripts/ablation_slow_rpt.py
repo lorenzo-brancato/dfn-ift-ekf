@@ -1,4 +1,4 @@
-"""Ablation of the slow segment of the RPT (Sec. IV-D): "with pulses alone the filter confused film resistance with loss of active material; the measured capacity tells them apart".
+"""Ablation of the slow segment of the RPT (Sec. III-D): "with pulses alone the filter confused film resistance with loss of active material; the measured capacity tells them apart".
 
 The final tracker (ageing_track.py: 4 parameters, guard, 4:1 grid, same noise sequence) is fed ONLY the pulse part of every RPT. In every RPT the samples of steps 14-18 of the cycle
 (slow C/2 discharge to 2.5 V, rest, slow C/2 charge to 4.2 V, CV hold to C/50, final rest: about 5 h of the 7.5 h) receive NO measurement update: the voltage is replaced by NaN, which the
@@ -41,7 +41,7 @@ def evaluate(at, d, P, R0, m, variant, seed):
 
 
 def main():
-    p = cli.parser("Sec. IV-D (slow segment of the RPT)", "final tracker fed with the pulse part of the RPT only vs with the slow segment", seeds="0")
+    p = cli.parser("Sec. III-D (slow segment of the RPT)", "final tracker fed with the pulse part of the RPT only vs with the slow segment", seeds="0")
     p.add_argument("--hours", type=float, default=100.0); p.add_argument("--tracking", default="results/ageing")
     p.add_argument("--with-reference", action="store_true", help="recompute the with_slow variant instead of reading it")
     p.add_argument("--chunk", type=int, default=None); p.add_argument("--ref", default=None); p.add_argument("--resume", action="store_true")

@@ -1,4 +1,4 @@
-"""Ablation of the state guard in the final configuration (Sec. IV-D and Appendix B).
+"""Ablation of the state guard in the final configuration (Sec. III-D and Appendix B).
 
 Two separate claims:
  (1) "without the state guard the filter breaks down" - tested here on the ageing reference with the final tracker (4 parameters, grid given by --grid, converged Newton closure),
@@ -113,7 +113,7 @@ def aggregate(a):
 
 
 def main():
-    p = cli.parser("Sec. IV-D and App. B (state guard)", "guard ablation on the ageing reference: breakdown time without the guard, rejected updates with it", seeds="0")
+    p = cli.parser("Sec. III-D and App. B (state guard)", "guard ablation on the ageing reference: breakdown time without the guard, rejected updates with it", seeds="0")
     p.add_argument("--aggregate", action="store_true"); p.add_argument("--max-hours", type=float, default=12.0, help="give up if the unguarded run has not broken down by then")
     p.add_argument("--margin-hours", type=float, default=1.0, help="the guarded run goes this far beyond the breakdown time of the unguarded one")
     p.add_argument("--chunk", type=int, default=5000); p.add_argument("--tracking", default="results/ageing"); p.add_argument("--static", default=None)

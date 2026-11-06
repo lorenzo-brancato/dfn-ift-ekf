@@ -92,7 +92,7 @@ def run_row(a, spec, prefix="grid_"):
 
 def main():
     p = cli.parser("Table I, Fig. 3 (grid study)", "model error and batch-fit bias versus grid and number of modes at th2")
-    p.add_argument("--rows", default="all", help="'all' (the four rows of Table I), 'extended' (all eight combinations), 'modes' (8 against 12 modes on the 10/5/10 uniform grid, Sec. III-D) or a row name: " + ", ".join(ROWS))
+    p.add_argument("--rows", default="all", help="'all' (the four rows of Table I), 'extended' (all eight combinations), 'modes' (8 against 12 modes on the 10/5/10 uniform grid, Sec. II-D) or a row name: " + ", ".join(ROWS))
     p.add_argument("--grid-spec", default=None, help="one custom row 'n_neg/n_sep/n_pos:N_m:grid', e.g. 20/10/20:12:4:1 (overrides --rows)")
     p.add_argument("--aggregate", action="store_true")
     a = p.parse_args()
@@ -111,7 +111,7 @@ def main():
 
 
 def modes(a, clock):
-    """Number of modes against grid (Sec. III-D): the coarsest grid (10/5/10, uniform) with 8 and with 12 modes, same procedure as Table I.
+    """Number of modes against grid (Sec. II-D): the coarsest grid (10/5/10, uniform) with 8 and with 12 modes, same procedure as Table I.
     Writes <results>/modes_10-5-10_uniform.csv (one row per N_m plus the change of the bias in percentage points); the per-row files use the prefix modes_, so the aggregate of Table I does not see them."""
     import pandas as pd
     rows = [run_row(a, ROWS[k], prefix="modes_") for k in ("10-5-10_Nm8_uniform", "10-5-10_Nm12_uniform")]

@@ -1,6 +1,6 @@
-"""Baseline SPMe 'nostro' (BRIEF v4 §5): stesse particelle modali, stesso elettrolita (E, G su 50 celle) e stessa cinetica del grey-box, ma con densita' di corrente
-di reazione UNIFORME in ciascun elettrodo (j_n = i/(a_n L_n), j_p = -i/(a_p L_p)): nessun sistema algebrico spaziale; potenziale elettrolita dal solve lineare con sorgente uniforme;
-cadute ohmiche degli elettrodi analitiche (i L/(3 sigma)). Stato compatto [c_n, a_n, s_n, c_p, a_p, s_p, c_e]. UKF square-root sullo stesso vettore logit theta."""
+"""Our SPMe baseline (BRIEF v4 §5): same modal particles, same electrolyte (E, G on 50 cells) and same kinetics as the grey box, but with UNIFORM reaction current
+density in each electrode (j_n = i/(a_n L_n), j_p = -i/(a_p L_p)): no spatial algebraic system; electrolyte potential from the linear solve with a uniform source;
+analytical ohmic drops of the electrodes (i L/(3 sigma)). Compact state [c_n, a_n, s_n, c_p, a_p, s_p, c_e]. Square-root UKF on the same logit theta vector."""
 import numpy as np
 import jax, jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
@@ -34,7 +34,7 @@ class SPMe:
         return (pn[0] + pn[1].sum(0) + pn[2].sum(0))[0], (pp[0] + pp[1].sum(0) + pp[2].sum(0))[0], ce
 
     def outputs(self, zs, I, th):
-        """V, eta_lit (nodo di separatore), phi_pl; j uniforme."""
+        """V, eta_lit (separator node), phi_pl; uniform j."""
         P, m = self.P, self.m; A_ = m.A; Nn, Ns, Np = m.Nn, m.Ns, m.Np
         csn, csp, ce = self.surf(zs)
         i_cc = I / P["area"]
@@ -45,13 +45,13 @@ class SPMe:
         ce_n, ce_p = jnp.maximum(ce[:Nn] @ wn, tiny), jnp.maximum(ce[Nn + Ns:] @ wp, tiny)
         j0n = P["k0_n"] * (ce_n * csn_ * (P["cmax_n"] - csn_)) ** P["alpha"]; j0p = P["k0_p"] * (ce_p * csp_ * (P["cmax_p"] - csp_)) ** P["alpha"]
         f2 = 2 * R * T / F; eta_n = f2 * jnp.arcsinh(jn / (2 * j0n)); eta_p = f2 * jnp.arcsinh(jp / (2 * j0p))
-        # elettrolita: potenziale dal solve lineare con sorgente uniforme
+        # electrolyte: potential from the linear solve with a uniform source
         cinv = 1 / (jnp.asarray(A_.wl_c) * ce[:-1] + (1 - jnp.asarray(A_.wl_c)) * ce[1:])
         ie_c = A_.j_Kd * A_.chi * cinv * (A_.j_Gm @ ce)
         aj = jnp.concatenate([a_n * jn * jnp.asarray(A_.dxn), jnp.zeros(Ns), a_p * jp * jnp.asarray(A_.dxp)])
         rhs = aj - A_.j_Dm @ ie_c
         pe_rest = jnp.linalg.solve(A_.j_A_e[1:, 1:], rhs[1:]); pe_lin = jnp.concatenate([jnp.zeros(1), pe_rest])
-        phis_n = -i_cc * P["Ln"] / (3 * P["sig_n"])                     # media di phi_s,n (phi_s,n(0) = 0)
+        phis_n = -i_cc * P["Ln"] / (3 * P["sig_n"])                     # mean of phi_s,n (phi_s,n(0) = 0)
         pe_n_avg = phis_n - (U_n(csn_ / P["cmax_n"]) + eta_n + Rf * jn)
         pe = pe_lin + (pe_n_avg - pe_lin[:Nn] @ wn)
         phis_p_avg = pe[Nn + Ns:] @ wp + U_p(csp_ / P["cmax_p"]) + eta_p
@@ -74,7 +74,7 @@ class SPMe:
 
 
 class UKFSPMe:
-    """UKF square-root (alpha = 1, kappa = 0, beta = 2) sull'SPMe: stessa convenzione di UKF4."""
+    """Square-root UKF (alpha = 1, kappa = 0, beta = 2) on the SPMe: same convention as UKF4."""
     def __init__(self, sp: SPMe):
         self.sp = sp; n = sp.n; self.n = n; self.gamma = np.sqrt(n)
         self.Wm = np.full(2 * n + 1, 1 / (2 * n)); self.Wm[0] = 0.0; self.Wc = self.Wm.copy(); self.Wc[0] = 2.0

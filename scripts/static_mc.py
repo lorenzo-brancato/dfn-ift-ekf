@@ -1,4 +1,4 @@
-"""Static-protocol Monte Carlo of the EKF (and of the full UKF) against PyBaMM: Fig. 5, Sec. III-B (IV-B), RMSE columns of Table V.
+"""Static-protocol Monte Carlo of the EKF (and of the full UKF) against PyBaMM: Fig. 5, Sec. III-B, RMSE columns of Table V.
 
 Five ageing states (th1..th5) x seeds 0-9. Truth = PyBaMM P6Lx2 reference (40/20/40 mesh, dt 0.5 s, 4320 s); measurement noise default_rng(seed) with sigma_V = 2 mV;
 initial offsets default_rng(200 + seed), +-40 % of the parameter range; EKF on (R_f, LAM, D_s) in logit coordinates, LLI fixed through the initial state.

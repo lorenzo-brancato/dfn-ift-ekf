@@ -1,4 +1,4 @@
-"""Model error of the grey-box DFN in the constant-voltage holds of the ageing run: Fig. 8f and the 0.7 mV / 44 % / 0.15 mV numbers of Sec. IV-D.
+"""Model error of the grey-box DFN in the constant-voltage holds of the ageing run: Fig. 8f and the 0.7 mV / 44 % / 0.15 mV numbers of Sec. III-D.
 
 The grey-box model is run in OPEN LOOP over the whole ageing reference with the TRUE ageing state: at every step the true Rf(t), LAM(t) of the reference are
 imposed (Ds = 1), the true initial state is used, and the lithium inventory is realigned to the true Li_tot(t) (so that no estimation is involved: what remains is model error).
@@ -118,12 +118,12 @@ def aggregate(a):
                 rows.append(dict(quantity=f"tracker_mean_innovation_{lab}_mV", value=float(g.innov_mean_mV.mean()), window=f"CV of RPT {lo}-{hi}, mean of the per-CV means (measured - predicted)", paper_text=txt))
                 rows.append(dict(quantity=f"tracker_mean_innovation_{lab}_weighted_mV", value=float(np.average(g.innov_mean_mV, weights=g.n_steps)), window=f"CV of RPT {lo}-{hi}, sample-weighted", paper_text=""))
     else: print(f"no tracker table at {trk}: the innovation number is skipped")
-    cli.write_csv(pd.DataFrame(rows), sa("tables"), "tab_cv_model_error.csv", note="numbers of Sec. IV-D on the model error in the CV")
+    cli.write_csv(pd.DataFrame(rows), sa("tables"), "tab_cv_model_error.csv", note="numbers of Sec. III-D on the model error in the CV")
     print(pd.DataFrame(rows).to_string())
 
 
 def main():
-    p = cli.parser("Fig. 8f, Sec. IV-D", "open-loop model error with the true parameters in the CV hold of each RPT")
+    p = cli.parser("Fig. 8f, Sec. III-D", "open-loop model error with the true parameters in the CV hold of each RPT")
     p.add_argument("--variants", default="z1,z2", help="z1 = uniform film, z2 = distributed film")
     p.add_argument("--aggregate", action="store_true"); p.add_argument("--tracking", default="results/ageing", help="results folder of ageing_track.py (innovation number)")
     p.add_argument("--ref", default=None, help="reference file (default <data>/aging_dyn_rptslow_full.npz)")

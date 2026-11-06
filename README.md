@@ -14,7 +14,7 @@ pip install -e ".[test]"
 python -m pytest tests -q
 ```
 
-Linux, macOS and Windows are supported by the code (no Windows-only calls; thread settings are applied before JAX is imported, see `dfnekf/runtime.py`). The reproduction reported below was run **on Windows 10 only**; Linux and macOS have not been run in this campaign.
+The code has no Windows-only calls (thread settings are applied before JAX is imported, see `dfnekf/runtime.py`). The full reproduction reported below was run on Windows 10. On **Linux** (Python 3.11, pinned versions, clean environment built from the source archive) the installation, the tests and a `--quick` run were also verified: the PyBaMM reference of F6Q at th1 regenerates in 49 s and `charge.py --quick` agrees with Windows to about 1e-6. **macOS** has not been tried.
 
 ## What is not in the repository
 
@@ -46,7 +46,7 @@ Times are wall-clock seconds (or hours) of one job on the machine below, one thr
 | Reference simulations | `python -m dfnekf.reference` (`refs`) | 1 | not logged in this run (inventory estimate: ≈ 2 CPU h) | ≈ 2 h |
 | Ageing reference, Fig. 8 | `ageing_reference.py` (`ageing_ref`) | 1 | 48 min | 0.8 h |
 | Sec. II-C, Appendix A | `jacobian_check.py --parts agreement`, `model_checks.py` (`model`) | 2 | 13.5 min, 3.9 min | 0.3 h |
-| Tab. I, Fig. 3; 8 against 12 modes, Sec. III-D | `grid_study.py` (`model`; `--rows modes` for the last) | 5 | 2.6–8.5 min | 0.3 h |
+| Tab. I, Fig. 3; 8 against 12 modes, Sec. II-D | `grid_study.py` (`model`; `--rows modes` for the last) | 5 | 2.6–8.5 min | 0.3 h |
 | Bias of the batch fit, Fig. 5 | `bias.py` (`model`) | 5 | 2.2–5.0 min | 0.2 h |
 | CRLB, Fig. 5 | `crlb.py` (`model`) | 1 | 4.1 min | 0.04 h |
 | Static Monte Carlo, Fig. 5, Tab. V | `static_mc.py` (`static`) | 5 | 35–43 min | 4.9 h |
@@ -54,7 +54,7 @@ Times are wall-clock seconds (or hours) of one job on the machine below, one thr
 | Charge, Fig. 7, Tab. III, IV, VI | `charge.py` (`protocols`) | 10 | 40–55 min | 10.6 h |
 | Discharge, Fig. 10, Tab. VII | `discharge.py` (`protocols`) | 6 | 31–47 min | 5.1 h |
 | Learned closure, Fig. 11, Tab. VIII | `train_closure.py`, `closure_ablation.py`, `residual_stress.py` (`closure_train`, `closure`) | 15 | 16 min (training), 4–38 min (runs), 1 min (stress) | 8.6 h |
-| Ageing tracking, Fig. 8, Sec. IV-D | `ageing_track.py` (`ageing`) | 2 | 15.7 h each, in parallel | 57.2 h |
+| Ageing tracking, Fig. 8, Sec. III-D | `ageing_track.py` (`ageing`) | 2 | 15.7 h each, in parallel | 57.2 h |
 | CV model error, Fig. 8f | `cv_model_error.py` (`aggregate`) | 2 | under 1 min | ≈ 0 |
 | Ablation: state guard (120 h) | `ablation_guard.py --guarded-from results/4to1` | 1 | 5.1 h | ≈ 7 h |
 | Ablation: slow RPT | `ablation_slow_rpt.py` | 1 | 10.8 h | 20.2 h |

@@ -1,4 +1,4 @@
-"""Pilot of the full UKF with the closure solved at every sigma point (Sec. IV-B / Table V, remark on the non-consistency of the UKF).
+"""Pilot of the full UKF with the closure solved at every sigma point (Appendix B / Table V, remark on the non-consistency of the UKF).
 
 The manuscript's full UKF performs ONE Newton iteration of the closure per sigma point (``--closure-iters 1``). The pilot repeats four twin runs at th2 (seeds 0, 3, 14 and 5: the three
 inconsistent runs of the 20 and one consistent run) with FOUR iterations, which brings the closure residual at the sigma points to machine precision in the median, and compares the
@@ -47,7 +47,7 @@ def aggregate(a):
 
 
 def main():
-    p = cli.parser("Sec. IV-B (UKF pilot, closure solved at the sigma points)", "four twin runs of the full UKF at th2 with 4 closure iterations per sigma point", seeds="0,3,14,5", states="th2")
+    p = cli.parser("Appendix B (UKF pilot, closure solved at the sigma points)", "four twin runs of the full UKF at th2 with 4 closure iterations per sigma point", seeds="0,3,14,5", states="th2")
     p.add_argument("--aggregate", action="store_true"); p.add_argument("--k1", default=None, help="folder with the k = 1 runs (twin_ukf1_th2_s*.csv) or a CSV with columns seed, nees_RfDs_mean, Rf_err_pct, Ds_err_pct")
     p.add_argument("--progress-chunk", type=int, default=0, help="print the progress every N steps (changes the NEES at the 1e-3 relative level, see twin_nees.py)")
     a = p.parse_args()

@@ -153,7 +153,7 @@ def aggregate(args):
         add(f"E_eta_rms_mV_{nm}", "all", "range_of_medians_lo", m.min(), "lowest per-state median"); add(f"E_eta_rms_mV_{nm}", "all", "range_of_medians_hi", m.max(), "highest per-state median")
     lo = D.phipl_min_ref_V_3C.min(); add("phipl_min_ref_V_3C", "all", "min_over_states", lo, "minimum of the reference phi_pl over all states in the 3C window (V)")
     add("phipl_ref_stays_above_0p4V", "all", "bool", float(lo > 0.4), "1 if the reference phi_pl stays above 0.4 V in the 3C window of every state")
-    cli.write_csv(pd.DataFrame(tn), args, "tables/discharge_text_numbers.csv", note="numbers quoted in the text of Sec. IV-C (discharge) and Appendix D. " + NOTE_TAIL, float_format="%.6g")
+    cli.write_csv(pd.DataFrame(tn), args, "tables/discharge_text_numbers.csv", note="numbers quoted in the text of Sec. III-C (discharge) and Appendix D. " + NOTE_TAIL, float_format="%.6g")
 
     # ---- Fig. 10 source data (seed 0)
     P0 = params.base(); parts = []; cm = []

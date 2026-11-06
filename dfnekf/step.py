@@ -1,6 +1,6 @@
-"""ROM esatto parametrico: z+ = Phi(z, I, theta). Funzione pura in JAX (x64).
-z = [c_avg (n_el), a (Nm x n_el), s (K x n_el), c_e (N)], n_el = Nn + Np (anodo poi catodo).
-theta = [Rf, as, Ds] (moltiplicatori). Convenzione: campione k: y_k = h(z_{k-1}, I_k), z_k = Phi(z_{k-1}, I_k)."""
+"""Exact parametric ROM: z+ = Phi(z, I, theta). Pure JAX function (x64).
+z = [c_avg (n_el), a (Nm x n_el), s (K x n_el), c_e (N)], n_el = Nn + Np (anode then cathode).
+theta = [Rf, as, Ds] (multipliers). Convention: sample k: y_k = h(z_{k-1}, I_k), z_k = Phi(z_{k-1}, I_k)."""
 import numpy as np
 import jax, jax.numpy as jnp
 import jax.scipy.linalg as jsl
@@ -20,7 +20,7 @@ class DFN:
         self.sl = dict(c=slice(0, n), a=slice(n, n + Nm * n), s=slice(n + Nm * n, n + Nm * n + K * n),
                        e=slice(n + Nm * n + K * n, n + Nm * n + K * n + self.N))
         self.nz = n + Nm * n + K * n + self.N
-        # elettrolita: operatore di diffusione (media armonica pesata di tor sugli spigoli: tor*D moltiplica un Gradient)
+        # electrolyte: diffusion operator (weighted harmonic mean of tor on the edges: tor*D multiplies a Gradient)
         A_ = self.A
         wl = A_.wl
         tor = A_.tor
@@ -29,7 +29,7 @@ class DFN:
         self.Mdiff = (A_.Dm @ (Kd[:, None] * A_.Gm)) / (A_.eps * A_.dx)[:, None]     # N x N
         self.jMdiff = jnp.asarray(self.Mdiff)
 
-    # ---- indicizzazione
+    # ---- indexing
     def split(self, z):
         n, Nm, K = self.nel, self.Nm, self.K
         return z[self.sl["c"]], z[self.sl["a"]].reshape(Nm, n), z[self.sl["s"]].reshape(K, n), z[self.sl["e"]]
@@ -47,7 +47,7 @@ class DFN:
         cs = c + a.sum(0) + s.sum(0)
         return cs[:self.Nn], cs[self.Nn:], ce
 
-    # ---- costanti del passo (dipendono da theta)
+    # ---- step constants (depend on theta)
     def part_consts(self, th, dt=None):
         dt = self.dt if dt is None else dt
         P = self.P
@@ -56,7 +56,7 @@ class DFN:
         return Cn, Cp
 
     def elec_mats(self, th, dt=None):
-        """E (N x N), G (N x n_el): c_e+ = E c_e + G j_el (ZOH esatto, expm del blocco aumentato)."""
+        """E (N x N), G (N x n_el): c_e+ = E c_e + G j_el (exact ZOH, expm of the augmented block)."""
         dt = self.dt if dt is None else dt
         P, A_ = self.P, self.A
         a_n, a_p, _ = A_.coef(th)
@@ -71,7 +71,7 @@ class DFN:
         Ph = jsl.expm(M * dt)
         return Ph[:N, :N], Ph[:N, N:]
 
-    # ---- chiusura algebrica
+    # ---- algebraic closure
     def closure_newton(self, z, I, th, g0=None, tol=1e-11):
         csn, csp, ce = self.surf(z)
         A_ = self.A
@@ -81,7 +81,7 @@ class DFN:
 
         def solve(f_, g_):
             return A_.solve_robust(g_, csn, csp, ce, I, th, tol=tol)[0]
-        # custom_root: differenziazione implicita, dg = -J^-1 dF
+        # custom_root: implicit differentiation, dg = -J^-1 dF
         g = jax.lax.custom_root(f, g0, solve, lambda g_, y: jnp.linalg.solve(jax.jacobian(g_)(y), y))
         return g
 
@@ -90,7 +90,7 @@ class DFN:
         g, _ = self.A.newton_fixed(g0, csn, csp, ce, I, th, k=k)
         return g
 
-    # ---- integrazione
+    # ---- integration
     def advance(self, z, g, th, consts=None, em=None):
         Cn, Cp = self.part_consts(th) if consts is None else consts
         E, G = self.elec_mats(th) if em is None else em
@@ -105,12 +105,12 @@ class DFN:
         return self.join(c2, a2, s2, ce2)
 
     def phi(self, z, I, th, g0=None):
-        """Passo con chiusura Newton convergita (differenziabile). Ritorna z+, g, V."""
+        """Step with converged Newton closure (differentiable). Returns z+, g, V."""
         g = self.closure_newton(z, I, th, g0)
         return self.advance(z, g, th), g, self.A.V_of(g, I)
 
     def lithium(self, z, th):
-        """Litio totale [mol/m2 di cella, per unita' di area elettrodo] = sum eps_s c_avg dx + eps_e c_e dx."""
+        """Total lithium [mol/m2 of cell, per unit electrode area] = sum eps_s c_avg dx + eps_e c_e dx."""
         P = self.P
         c, a, s, ce = self.split(z)
         n_n = P["eps_sn"] * th[1] * jnp.sum(c[:self.Nn] * self.A.dxn)
@@ -118,7 +118,7 @@ class DFN:
         n_e = jnp.sum(self.A.eps * ce * self.A.dx)
         return n_n + n_p + n_e
 
-    # ---- grandezze di interfaccia anodo/separatore (estrapolazione lineare dalle ultime due celle dell'anodo)
+    # ---- anode/separator interface quantities (linear extrapolation from the last two anode cells)
     def extrap_right(self, v):
         """Linear extrapolation to the anode/separator interface from the last two anode cell centres (= 1.5 v[-1] - 0.5 v[-2] for equal cells)."""
         w = self.A.dxn; f = w[-1] / (w[-1] + w[-2])
@@ -136,7 +136,7 @@ class DFN:
 
 
 def interface_ref(r, i, P, Rf_mult, Nn=40):
-    """Stesse grandezze dai dati PyBaMM fine (Nn = 40 celle anodo)."""
+    """Same quantities from the fine PyBaMM data (Nn = 40 anode cells)."""
     ex = lambda v: 1.5 * v[-1] - 0.5 * v[-2]
     phis = ex(r["phi_s_n"][i]); phie = ex(r["phi_e"][i][:Nn]); cs = ex(r["cs_n"][i]); j = ex(r["j_n"][i])
     Un = float(U_n(cs / P["cmax_n"]))
@@ -144,12 +144,12 @@ def interface_ref(r, i, P, Rf_mult, Nn=40):
 
 
 def _g_hat(self, j, csn, csp, ce, I, th):
-    """Dato j (20), ricostruisce g = [j, phi_e, phi_s] con le equazioni lineari + BV inverso (nessuna iterazione); V; residuo ||F||."""
+    """Given j (20), rebuilds g = [j, phi_e, phi_s] with the linear equations + inverse BV (no iteration); V; residual ||F||."""
     A_ = self.A; P = self.P
     Nn, Np, N, Ns = self.Nn, self.Np, self.N, self.Ns
     jn, jp = j[:Nn], j[Nn:]
     a_n, a_p, Rf = A_.coef(th)
-    sn = jnp.linalg.solve(A_.j_B_n, -a_n * jn * A_.dxn)                         # Ohm anodo (Dirichlet)
+    sn = jnp.linalg.solve(A_.j_B_n, -a_n * jn * A_.dxn)                         # anode Ohm (Dirichlet)
     tiny = 1e-6
     csn_ = jnp.clip(csn, tiny, P["cmax_n"] - tiny); csp_ = jnp.clip(csp, tiny, P["cmax_p"] - tiny)
     ce_n, ce_p = ce[:Nn], ce[Nn + Ns:]

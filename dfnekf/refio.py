@@ -21,7 +21,7 @@ def load(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data", grid_ratio=
     th = d["theta"]; out["Rf"], out["LAM"], out["LLI"], out["Ds"] = [float(x) for x in th]
     out["as_"] = 1 - out["LAM"]
     c0 = [float(x) for x in d["c0"]]
-    out["c0_eff"] = (c0[0] - out["LLI"] * 0.8735 * 33133.0, c0[1])        # stato iniziale uniforme effettivo (LLI applicato all'anodo)
+    out["c0_eff"] = (c0[0] - out["LLI"] * 0.8735 * 33133.0, c0[1])        # effective uniform initial state (LLI applied to the anode)
     return out
 
 

@@ -1,4 +1,4 @@
-"""Charge experiments: grey-box DFN-EKF with state guard versus the SPMe unscented filter (Sec. IV-C, Fig. 7, Tables III, IV, VI, Appendix D thresholds).
+"""Charge experiments: grey-box DFN-EKF with state guard versus the SPMe unscented filter (Sec. III-C, Fig. 7, Tables III, IV, VI, Appendix D thresholds).
 
 Protocol F6Q (F6Q3 for state th3): two P6L blocks, a 1C constant-current charge to nominal SOC 0.6 (1272 s; 372 s for F6Q3), a rest, and two 30 s 2C charge pulses
 terminated at 4.2 V. Reference: PyBaMM DFN (mesh 40/20/40, dt = 0.5 s). Five ageing states x seeds 0-9. Both filters see the same initial parameter offsets
@@ -190,7 +190,7 @@ def aggregate(args):
         add("margin_phipl_ratio_of_medians", "all", "any", "max", S.margin_phipl_ratio_of_medians.max(), "largest SPMe/EKF margin over states and pulses")
         pe = P2[P2["filter"] == "EKF"]; dly = (pe.thr0_t_ref_s - pe.t_start_s).dropna()
         add("ref_phipl_zero_crossing_after_pulse_start_s", "all", "any", "max", dly.max(), "time from the pulse start to the first reference sample with phi_pl < 0 (s), all 2C pulses with a crossing")
-        pd.DataFrame(tn).pipe(lambda d: cli.write_csv(d, args, "tables/charge_text_numbers.csv", note="numbers quoted in the text of Sec. IV-C that were previously computed by hand; 2C pulses of " + NOTE_TAIL, float_format="%.6g"))
+        pd.DataFrame(tn).pipe(lambda d: cli.write_csv(d, args, "tables/charge_text_numbers.csv", note="numbers quoted in the text of Sec. III-C that were previously computed by hand; 2C pulses of " + NOTE_TAIL, float_format="%.6g"))
 
         det = []
         for thr in THRS:
@@ -265,7 +265,7 @@ def aggregate(args):
 
 
 def main():
-    p = cli.parser("Sec. IV-C, Fig. 7, Tables III, IV, VI, Appendix D", "grey-box EKF with state guard versus SPMe UKF on the charge protocol F6Q")
+    p = cli.parser("Sec. III-C, Fig. 7, Tables III, IV, VI, Appendix D", "grey-box EKF with state guard versus SPMe UKF on the charge protocol F6Q")
     p.add_argument("--aggregate", action="store_true", help="build the tables and source data from the per-run files in --results (no simulation)")
     p.add_argument("--resume", action="store_true", help="skip runs whose trajectory file already exists")
     args = p.parse_args()

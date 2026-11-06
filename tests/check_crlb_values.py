@@ -1,4 +1,4 @@
-"""Check of the Cramer-Rao bounds against the stored values of the manuscript (Fig. 5 grey bars, Sec. IV-B).
+"""Check of the Cramer-Rao bounds against the stored values of the manuscript (Fig. 5 grey bars, Sec. III-B).
 
 1. Linear algebra (no model run): from the stored 4-parameter table (tests/data/tab_crlb_m17.csv, P6Lx2, version stato_noto) rebuild the 4 x 4 covariance,
    take the Schur complement with respect to LLI and compare with the column `crlb` of tests/data/mc_budget.csv (tolerance: the 3 printed decimals).

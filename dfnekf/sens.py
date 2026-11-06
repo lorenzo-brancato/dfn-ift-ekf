@@ -1,5 +1,5 @@
-"""Sensibilita' di V lungo una traiettoria del ROM (Newton convergito) con le equazioni di sensibilita' dello stato e le Jacobiane strutturate:
-S_{k+1} = (Lambda + B C) S_k + dPhi/dpar_k,  dV_k/dpar = h_k S_k + dV/dpar_direct.  Parametri: Rf, LAM, Ds (via theta = [Rf, 1-LAM, Ds]), LLI (stato iniziale), nuisance (d c_n0, d c_p0)."""
+"""Sensitivities of V along a ROM trajectory (converged Newton) with the state sensitivity equations and the structured Jacobians:
+S_{k+1} = (Lambda + B C) S_k + dPhi/dpar_k,  dV_k/dpar = h_k S_k + dV/dpar_direct.  Parameters: Rf, LAM, Ds (via theta = [Rf, 1-LAM, Ds]), LLI (initial state), nuisance (d c_n0, d c_p0)."""
 import numpy as np
 import jax, jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
@@ -12,9 +12,9 @@ DX_N = 0.8735
 
 
 def traj_sens(m: DFN, th_full, z0, Iseq, par=("Rf", "LAM", "Ds"), nuis=False, return_V=False):
-    """par: sottoinsieme ordinato di {'Rf','LAM','LLI','Ds'}; nuis: aggiunge dc_n0, dc_p0 (colonne di S iniziali). Ritorna dV [N, npar+2*nuis]."""
+    """par: ordered subset of {'Rf','LAM','LLI','Ds'}; nuis: adds dc_n0, dc_p0 (initial columns of S). Returns dV [N, npar+2*nuis]."""
     S = Struct(m); A_ = m.A; nj, nz, Nn = m.nel, m.nz, m.Nn
-    ek = EKF(m, closure="newton", coords=("Rf", "Ds"))             # per em_of (G lineare in a_s)
+    ek = EKF(m, closure="newton", coords=("Rf", "Ds"))             # for em_of (G linear in a_s)
     ncol = len(par) + (2 if nuis else 0)
     S0 = jnp.zeros((nz, ncol))
     for j, name in enumerate(par):
@@ -36,7 +36,7 @@ def traj_sens(m: DFN, th_full, z0, Iseq, par=("Rf", "LAM", "Ds"), nuis=False, re
         dirc = jax.jacfwd(lambda t: m.advance(z, g, t, None, ek.em_of(t)))(th_full)          # nz x 3
         V = A_.V_of(g, Ik)
         dV = C[nj] @ Sm
-        # dipendenza diretta/indiretta da theta
+        # direct/indirect dependence on theta
         dz_th = jnp.zeros((nz, ncol)); dv_th = jnp.zeros(ncol)
         for j, name in enumerate(par):
             if name in pidx:

@@ -14,3 +14,5 @@ build/
 *.egg-info/
 !paper/figures/data/
 !dfnekf/assets/*.pkl
+!tests/data/
+!tests/data/*.npz

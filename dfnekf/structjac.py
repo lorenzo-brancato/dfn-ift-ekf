@@ -1,12 +1,12 @@
-"""Jacobiano strutturato del passo: z+ = Lambda z + B j(z, theta) (+ dipendenza diretta di Lambda, B da D_s).
-Struttura nel codice (step.py DFN.advance + particles.step + elec_mats):
+"""Structured Jacobian of the step: z+ = Lambda z + B j(z, theta) (+ direct dependence of Lambda, B on D_s).
+Structure in the code (step.py DFN.advance + particles.step + elec_mats):
   c_avg+  = c_avg - (3 dt / R F) j                      -> Lambda = 1,  B = -3 dt/(R F)
-  a_m+    = exp(-kap_m dt) a_m - gain_m j / F           -> Lambda = e_m (D_s,n per anodo), B = -gain_m/F        (m = 1..N_m)
-  s_k+    = rho_k s_k - (1-rho_k) W_k j / F             -> coda: K modi effettivi, Lambda = rho_k (dipende da D_s), B = -(1-rho_k) W_k / F
-  c_e+    = E c_e + G j_el                               -> blocco E fisso (dipende solo da a_s), G da expm aumentato
-  j = j(c_surf(z), c_e, I, theta) da F(y; z, theta) = 0,  c_surf = c_avg + sum_m a_m + sum_k s_k  (y = [j, phi_e, phi_s]).
-Quindi A = dPhi/dz = Lambda + B C, C = dj/dz = (dj/dw)(dw/dz), w = (c_surf,n; c_surf,p; c_e); ZOH: j costante sul passo (nessun termine in dj/dt).
-Teorema della funzione implicita: dy/dw = -J_F^-1 dF/dw. Verso: pullback (J_F^T X = E_sel) con n_j + 1 = 21 uscite (j e V) contro 45 ingressi."""
+  a_m+    = exp(-kap_m dt) a_m - gain_m j / F           -> Lambda = e_m (D_s,n for the anode), B = -gain_m/F        (m = 1..N_m)
+  s_k+    = rho_k s_k - (1-rho_k) W_k j / F             -> tail: K effective modes, Lambda = rho_k (depends on D_s), B = -(1-rho_k) W_k / F
+  c_e+    = E c_e + G j_el                               -> fixed block E (depends on a_s only), G from the augmented expm
+  j = j(c_surf(z), c_e, I, theta) from F(y; z, theta) = 0,  c_surf = c_avg + sum_m a_m + sum_k s_k  (y = [j, phi_e, phi_s]).
+Hence A = dPhi/dz = Lambda + B C, C = dj/dz = (dj/dw)(dw/dz), w = (c_surf,n; c_surf,p; c_e); ZOH: j constant over the step (no dj/dt term).
+Implicit function theorem: dy/dw = -J_F^-1 dF/dw. Reverse mode: pullback (J_F^T X = E_sel) with n_j + 1 = 21 outputs (j and V) against 45 inputs."""
 import numpy as np
 import jax, jax.numpy as jnp
 import jax.scipy.linalg as jsl
@@ -25,12 +25,12 @@ class Struct:
         self.nzp = n + Nm * n + K * n
         self.ng = m.A.ng
 
-    # --- Lambda (diag particellare) e B (nz x nel) dai costanti del passo
+    # --- Lambda (particle diagonal) and B (nz x nel) from the step constants
     def lam_B(self, th, em=None):
         m = self.m; n, Nn, Np = self.n, m.Nn, m.Np
         Cn, Cp = m.part_consts(th)
         E, G = m.elec_mats(th) if em is None else em
-        def per_node(vn, vp):          # vn, vp [...]: anodo/catodo -> [..., n]
+        def per_node(vn, vp):          # vn, vp [...]: anode/cathode -> [..., n]
             return jnp.concatenate([jnp.repeat(vn[..., None], Nn, -1), jnp.repeat(vp[..., None], Np, -1)], -1)
         dvec = jnp.concatenate([jnp.ones(n), per_node(Cn["e"], Cp["e"]).reshape(-1), per_node(Cn["rho"], Cp["rho"]).reshape(-1)])
         Bm = jnp.zeros((m.nz, n))
@@ -47,7 +47,7 @@ class Struct:
         L = L.at[jnp.arange(self.nzp), jnp.arange(self.nzp)].set(dvec)
         return L.at[self.ie[:, None], self.ie[None, :]].set(E)
 
-    # --- sensibilita' di y (j e V) rispetto a w e theta in g convergito
+    # --- sensitivities of y (j and V) with respect to w and theta at converged g
     def lu(self, g, z, I, th):
         m = self.m; csn, csp, ce = m.surf(z)
         return jsl.lu_factor(m.A.jac(g, csn, csp, ce, I, th))
@@ -67,20 +67,20 @@ class Struct:
         return Sw, -X.T @ Ft, X
 
     def C_of(self, Sw):
-        """(n+1) x nz: righe = j (n) e V; colonne = z"""
+        """(n+1) x nz: rows = j (n) and V; columns = z"""
         n, Nm, K = self.n, self.Nm, self.K
         Swc, Swe = Sw[:, :n], Sw[:, n:]
         return jnp.concatenate([Swc] + [Swc] * Nm + [Swc] * K + [Swe], axis=1)
 
     def jac_full(self, z, I, th, g):
-        """Jz [nz+1, nz] e Jtheta [nz+1, 3] dense (righe: z+, V) per il confronto con jacfwd; theta = [Rf, as, Ds] (3 colonne)."""
+        """Dense Jz [nz+1, nz] and Jtheta [nz+1, 3] (rows: z+, V) for the comparison with jacfwd; theta = [Rf, as, Ds] (3 columns)."""
         m = self.m; n = self.n
         dvec, E, Bm = self.lam_B(th)
         lu = self.lu(g, z, I, th)
         Sw, Sth, _ = self.sens(lu, g, z, I, th)
         C = self.C_of(Sw)
         Azz = self.lam_dense(dvec, E) + Bm @ C[:n]
-        dir_th = jax.jacfwd(lambda t: m.advance(z, g, t))(th)               # dipendenza diretta di Lambda, B, E, G da theta (g fisso)
+        dir_th = jax.jacfwd(lambda t: m.advance(z, g, t))(th)               # direct dependence of Lambda, B, E, G on theta (g fixed)
         Jth_z = Bm @ Sth[:n] + dir_th
         Jz = jnp.concatenate([Azz, C[n:n + 1]], 0)
         Jt = jnp.concatenate([Jth_z, Sth[n:n + 1]], 0)

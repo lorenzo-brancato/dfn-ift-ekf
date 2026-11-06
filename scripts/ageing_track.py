@@ -1,4 +1,4 @@
-"""Tracking of the ageing run: Fig. 8 (panels a-e) and Sec. IV-D.
+"""Tracking of the ageing run: Fig. 8 (panels a-e) and Sec. III-D.
 
 The guarded EKF with four parameters (Rf, LAM, Ds, LLI; state guard on, converged Newton closure, 20/10/20 cells, N_m = 12, dt = 0.5 s, sigma_V = 2 mV) is run once, without
 interruption, over the 294 h ageing reference (``scripts/ageing_reference.py``). It is evaluated at every RPT at four read-out points (end of P6L, end of the slow
@@ -57,7 +57,7 @@ def write_run_tables(a, name, label, d, m, P, R0):
 
 
 def headline(R):
-    """Numbers quoted in Sec. IV-D from the read-out before the CV: last RPT passing the Rf criterion, worst LAM / Ds / inventory error up to RPT 8, Rf error at RPT 9, first RPT failing at the end of the CV."""
+    """Numbers quoted in Sec. III-D from the read-out before the CV: last RPT passing the Rf criterion, worst LAM / Ds / inventory error up to RPT 8, Rf error at RPT 9, first RPT failing at the end of the CV."""
     import numpy as np
     pc = R[R.point == "precv"].set_index("rpt"); en = R[R.point == "end"].set_index("rpt"); h = {}
     ok = [r for r in pc.index if r >= 1 and pc.loc[r, "ABZ_ok"]]; bad = [r for r in pc.index if r >= 1 and not pc.loc[r, "ABZ_ok"]]
@@ -88,8 +88,8 @@ def aggregate(a, P, R0):
     cols = ["label", "variant", "seed", "rpt", "point", "t_h", "innov_rms_mV_chunk"] + [f"{c}_{k}" for c in at.COORDS for k in ("true", "est", "err", "sd", "z", "edge_pct")] + ["LLI_inv_err", "LLI_inv_z", "corr_Rf_LAM", "corr_LAM_LLI", "corr_Rf_Ds", "A_ok", "B_ok", "z_ok", "ABZ_ok"]
     T["seed"] = T.label.str.replace("seed", "").astype(int)
     cli.write_csv(T[cols], tab_args("tables"), "tab_aging_tracking.csv", note="Table of the tracking criteria, one row per seed x RPT x read-out point", float_format="%.6g")
-    cli.write_csv(pd.concat(cvs, ignore_index=True), tab_args("tables"), "tab_aging_cv.csv", note="diagnostics of the constant-voltage holds (Sec. IV-D)")
-    if sums: cli.write_csv(pd.DataFrame(sums), tab_args("tables"), "tab_aging_summary.csv", note="gates and headline numbers of Sec. IV-D")
+    cli.write_csv(pd.concat(cvs, ignore_index=True), tab_args("tables"), "tab_aging_cv.csv", note="diagnostics of the constant-voltage holds (Sec. III-D)")
+    if sums: cli.write_csv(pd.DataFrame(sums), tab_args("tables"), "tab_aging_summary.csv", note="gates and headline numbers of Sec. III-D")
     # Fig. 8e: criteria rows of the four read-out points
     F = T[["label", "rpt", "point", "t_h", "Rf_err", "LAM_err", "Ds_err", "LLI_inv_err", "Rf_z", "LAM_z", "Ds_z", "LLI_inv_z", "A_ok", "B_ok", "z_ok", "ABZ_ok", "innov_rms_mV_chunk"]].rename(columns={"label": "run"})
     cli.write_csv(F, tab_args("source_data"), "fig_tracking_rpt.csv", note="Fig. 8e: error at the four read-out points of every RPT", float_format="%.6g")
@@ -112,7 +112,7 @@ def aggregate(a, P, R0):
 
 
 def main():
-    p = cli.parser("Fig. 8a-e, Sec. IV-D", "ageing tracker over the 294 h reference and its evaluation", seeds="0,1")
+    p = cli.parser("Fig. 8a-e, Sec. III-D", "ageing tracker over the 294 h reference and its evaluation", seeds="0,1")
     p.add_argument("--aggregate", action="store_true", help="build the tables and source data from the stored trajectories")
     p.add_argument("--hours", type=float, default=None, help="stop after this many simulated hours")
     p.add_argument("--resume", action="store_true", help="continue from the checkpoint of an interrupted run")

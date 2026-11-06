@@ -1,4 +1,4 @@
-"""Ageing tracker (Sec. IV-D, Fig. 8): the guarded EKF with four parameters (Rf, LAM, Ds, LLI) run over the whole ageing reference, and its evaluation.
+"""Ageing tracker (Sec. III-D, Fig. 8): the guarded EKF with four parameters (Rf, LAM, Ds, LLI) run over the whole ageing reference, and its evaluation.
 
 One code path for every use: ``Tracker`` builds the filter (4:1 or uniform grid, N_m = 12, dt = 0.5 s, closure 'newton', sigma_V = 2 mV, optional state guard),
 ``track`` runs it in jitted chunks of 20000 steps (resumable), ``evaluate_rpt`` / ``cv_table`` reduce the stored trajectory to the numbers of the paper.

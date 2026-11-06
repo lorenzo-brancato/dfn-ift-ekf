@@ -1,4 +1,4 @@
-"""Cramer-Rao bounds of the ageing parameters (Fig. 5 grey bars, Sec. IV-B, Appendix D).
+"""Cramer-Rao bounds of the ageing parameters (Fig. 5 grey bars, Sec. III-B, Appendix D).
 
 Computes, for every ageing state and protocol, the Fisher information of the voltage record from the exact sensitivities of the grey-box model
 (structured implicit-function-theorem Jacobians propagated along the trajectory), sigma_V = 2 mV, dt = 0.5 s, and writes three bounds per run:
@@ -29,7 +29,7 @@ COLS = ["protocol", "theta_tag", "theta", "version", "parameter", "sd", "range_w
 
 
 def main():
-    p = cli.parser("Fig. 5 (grey bars), Sec. IV-B, Appendix D", "Cramer-Rao bounds of (R_f, LAM, D_s) conditioned on LLI, 4-parameter marginal, unknown initial SOC", states="th1,th2,th3,th4,th5")
+    p = cli.parser("Fig. 5 (grey bars), Sec. III-B, Appendix D", "Cramer-Rao bounds of (R_f, LAM, D_s) conditioned on LLI, 4-parameter marginal, unknown initial SOC", states="th1,th2,th3,th4,th5")
     p.add_argument("--protocols", default="P6Lx2", help="comma-separated protocols (P6Lx2, P6L, P2, D1)")
     p.add_argument("--with-k0", action="store_true", help="also the 5-parameter version with the exchange-current constant k0 (finite differences; P6Lx2 and P6L only)")
     p.add_argument("--sigma", type=float, default=2e-3, help="measurement noise standard deviation [V]")

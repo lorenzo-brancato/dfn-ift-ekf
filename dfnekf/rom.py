@@ -1,4 +1,4 @@
-"""ROM in ciclo chiuso: scan sul protocollo con Newton a k iterazioni (warm start) o convergito."""
+"""Closed-loop ROM: scan over the protocol with Newton at k iterations (warm start) or converged."""
 import numpy as np
 import jax, jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
@@ -6,7 +6,7 @@ from .step import DFN
 
 
 def simulate(m: DFN, z0, Iseq, th, k=2, converged_first=True):
-    """Ritorna dict di array [N,...]: V (y_k = h(z_{k-1}, I_k)), cs_n, cs_p, ce (stato a t_{k-1}), eta_lit, phi_pl, resF."""
+    """Returns a dict of arrays [N,...]: V (y_k = h(z_{k-1}, I_k)), cs_n, cs_p, ce (state at t_{k-1}), eta_lit, phi_pl, resF."""
     Iseq = jnp.asarray(Iseq)
     A_ = m.A
     consts = m.part_consts(th)
@@ -17,7 +17,7 @@ def simulate(m: DFN, z0, Iseq, th, k=2, converged_first=True):
     def body(carry, I):
         z, g = carry
         csn, csp, ce = m.surf(z)
-        if k is None:                                   # Newton convergito con line search (warm start)
+        if k is None:                                   # converged Newton with line search (warm start)
             g, _, nit = A_.solve_robust(g, csn, csp, ce, I, th, tol=1e-10)
         else:
             g = A_.newton_fixed(g, csn, csp, ce, I, th, k=k)[0] if k > 0 else g
@@ -33,7 +33,7 @@ def simulate(m: DFN, z0, Iseq, th, k=2, converged_first=True):
 
 
 def simulate_nn(m: DFN, net, z0, Iseq, th, kN=0):
-    """Ciclo chiuso con la chiusura neurale. kN = numero di passi di Newton di correzione (0 = k=0). net(csn,csp,ce,I,th) -> j [20]."""
+    """Closed loop with the neural closure. kN = number of correcting Newton steps (0 = k=0). net(csn,csp,ce,I,th) -> j [20]."""
     Iseq = jnp.asarray(Iseq)
     consts = m.part_consts(th); em = m.elec_mats(th); A_ = m.A
 

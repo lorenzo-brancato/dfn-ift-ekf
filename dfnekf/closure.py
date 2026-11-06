@@ -1,5 +1,5 @@
-"""Sistema algebrico del DFN a stato congelato (CONVENTIONS.md): incognite g = [j_n, j_p, phi_e(N), phi_s_n, phi_s_p].
-Dati: c_s,surf (n, p), c_e (N), I, theta = [Rf, as, Ds] (moltiplicatori). Jacobiano analitico, Newton con line search."""
+"""Algebraic system of the DFN at frozen state (CONVENTIONS.md): unknowns g = [j_n, j_p, phi_e(N), phi_s_n, phi_s_p].
+Given: c_s,surf (n, p), c_e (N), I, theta = [Rf, as, Ds] (multipliers). Analytical Jacobian, Newton with line search."""
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -44,14 +44,14 @@ class Alg:
         tor = eps ** P["brug"]
         self.tor = tor
         dxe = 0.5 * (dx[:-1] + dx[1:])
-        wl = 0.5 * dx[1:] / dxe                      # peso della cella sinistra (interpolazione lineare alla posizione dello spigolo)
+        wl = 0.5 * dx[1:] / dxe                      # weight of the left cell (linear interpolation at the edge position)
         self.wl = wl
         self.wl_c = (1.0 - wl) if grid_ratio is not None else wl     # M2 block G: PyBaMM weights the 1/c_e edge mean with the cell widths (checked against the reference residual, 4e-14); default (uniform) unchanged
-        if edge_avg == "linear":                      # come FiniteVolume.node_to_edge di PyBaMM su mesh non uniforme
+        if edge_avg == "linear":                      # as PyBaMM's FiniteVolume.node_to_edge on a non-uniform mesh
             tor_e = wl * tor[:-1] + (1 - wl) * tor[1:]
         elif edge_avg == "arith":
             tor_e = 0.5 * (tor[:-1] + tor[1:])
-        else:  # armonica pesata sulle semicelle
+        else:  # harmonic mean weighted on the half cells
             tor_e = dxe / (0.5 * dx[:-1] / tor[:-1] + 0.5 * dx[1:] / tor[1:])
         self.dxe, self.tor_e = dxe, tor_e
         Gm = np.zeros((N - 1, N)); Gm[np.arange(N - 1), np.arange(N - 1)] = -1; Gm[np.arange(N - 1), np.arange(1, N)] = 1
@@ -59,9 +59,9 @@ class Alg:
         self.Gm, self.Dm = Gm, Dm
         Kd = P["kappa"] * tor_e / dxe
         self.Kd = Kd
-        self.A_e = -Dm @ (Kd[:, None] * Gm)                      # N x N (su phi_e)
+        self.A_e = -Dm @ (Kd[:, None] * Gm)                      # N x N (on phi_e)
         self.chi = 2 * R * T * (1 - P["tplus"]) * P["tdf"] / F
-        # elettrodi
+        # electrodes
         def lap(n, w, sig, dirich):
             """Finite-volume operator sigma * (flux balance), face distance = distance between cell centres; Dirichlet at the half cell on the left (anode) or Neumann."""
             B = np.zeros((n, n)); de = 0.5 * (w[:-1] + w[1:])
@@ -74,10 +74,10 @@ class Alg:
         self.B_p = lap(Np, wp, P["sig_p"], False)
         self.dxn, self.dxp = wn, wp
         self.Nel = Nn + Np
-        # indici
-        self.iel = np.concatenate([np.arange(Nn), np.arange(Nn + Ns, N)])    # celle di elettrodo nel vettore N
+        # indices
+        self.iel = np.concatenate([np.arange(Nn), np.arange(Nn + Ns, N)])    # electrode cells in the N vector
         self.ng = 2 * self.Nel + N
-        # scalature di riga (Jacobiano lineare: costanti)
+        # row scalings (linear Jacobian: constants)
         self.s_e = 1.0 / np.abs(np.diag(self.A_e)).max()
         self.s_sn = 1.0 / np.abs(np.diag(self.B_n)).max()
         self.s_sp = 1.0 / np.abs(np.diag(self.B_p)).max()
@@ -127,14 +127,14 @@ class Alg:
         return j0n, j0p, eta_n, eta_p, f, a_n, a_p, Rf
 
     def residual(self, g, csn, csp, ce, I, th):
-        """F(g) scalato (righe BV: A/m2; righe potenziali: ~V)."""
+        """Scaled F(g) (BV rows: A/m2; potential rows: ~V)."""
         P = self.P
         i_cc = I / P["area"]
         jn, jp, pe, sn, sp = self.unpack(g)
         j0n, j0p, eta_n, eta_p, f, a_n, a_p, Rf = self.bv_parts(g, csn, csp, ce, th)
         r_bvn = jn - 2 * j0n * jnp.sinh(f * eta_n)
         r_bvp = jp - 2 * j0p * jnp.sinh(f * eta_p)
-        # elettrolita
+        # electrolyte
         wl = jnp.asarray(self.wl_c)
         cinv_e = wl / ce[:-1] + (1 - wl) / ce[1:] if self.cinv_mode == 'mean_inv' else 1 / (wl * ce[:-1] + (1 - wl) * ce[1:])
         ie_c = self.j_Kd * self.chi * cinv_e * (self.j_Gm @ ce)
@@ -146,7 +146,7 @@ class Alg:
         return jnp.concatenate([r_bvn, r_bvp, r_e * self.s_e, r_sn * self.s_sn, r_sp * self.s_sp])
 
     def jac(self, g, csn, csp, ce, I, th):
-        """Jacobiano analitico (scalato come residual)."""
+        """Analytical Jacobian (scaled as the residual)."""
         Nn, Np, Ns, N, Nel = self.Nn, self.Np, self.Ns, self.N, self.Nel
         j0n, j0p, eta_n, eta_p, f, a_n, a_p, Rf = self.bv_parts(g, csn, csp, ce, th)
         Gn = 2 * f * j0n * jnp.cosh(f * eta_n)       # d(2 j0 sinh(f eta))/d eta
@@ -161,12 +161,12 @@ class Alg:
         J = J.at[rp, o_pe + Ns + Nn + jnp.arange(Np)].set(Gp)
         J = J.at[rn, o_sn + jnp.arange(Nn)].set(-Gn)
         J = J.at[rp, o_sp + jnp.arange(Np)].set(-Gp)
-        # elettrolita
+        # electrolyte
         J = J.at[Nel:Nel + N, o_pe:o_pe + N].set(self.j_A_e * self.s_e)
         ce_rows = Nel + jnp.arange(N)
         J = J.at[Nel + jnp.arange(Nn), rn].set(-a_n * self.dxn * self.s_e)
         J = J.at[Nel + Nn + Ns + jnp.arange(Np), rp].set(-a_p * self.dxp * self.s_e)
-        # elettrodi
+        # electrodes
         J = J.at[o_sn:o_sn + Nn, o_sn:o_sn + Nn].set(self.j_B_n * self.s_sn)
         J = J.at[o_sn + jnp.arange(Nn), rn].set(a_n * self.dxn * self.s_sn)
         J = J.at[o_sp:o_sp + Np, o_sp:o_sp + Np].set(self.j_B_p * self.s_sp)
@@ -174,12 +174,12 @@ class Alg:
         return J
 
     def V_of(self, g, I):
-        """Tensione: phi_s,p al bordo destro (Neumann: phi_N - dx/2 * i_cc/sigma) - phi_s,n(0)=0."""
+        """Voltage: phi_s,p at the right boundary (Neumann: phi_N - dx/2 * i_cc/sigma) - phi_s,n(0)=0."""
         P = self.P
         sp = self.unpack(g)[4]
         return sp[-1] - 0.5 * self.dxp[-1] * (I / P["area"]) / P["sig_p"]
 
-    # ---- guess e Newton
+    # ---- guess and Newton
     def guess(self, csn, csp, I, th):
         P = self.P
         a_n, a_p, Rf = self.coef(th)
@@ -194,7 +194,7 @@ class Alg:
         return self.pack(jn, jp, pe, sn, sp)
 
     def newton(self, g0, csn, csp, ce, I, th, tol=1e-11, maxit=60):
-        """Newton con backtracking (loop con arresto): ritorna g, ||F||, n_iter."""
+        """Newton with backtracking (loop with stopping test): returns g, ||F||, n_iter."""
         res = lambda g: self.residual(g, csn, csp, ce, I, th)
 
         def cond(s):
@@ -217,7 +217,7 @@ class Alg:
             def lsc(c):
                 return (~c[3]) & (c[0] > 1e-6)
             a, gn, rn_, ok = jax.lax.while_loop(lsc, ls, (1.0, g, r, False))
-            # se nessun passo di discesa: prendi il passo pieno
+            # if no descent step is found: take the full step
             gn = jnp.where(ok, gn, g + dg)
             rn_ = jnp.where(ok, rn_, res(g + dg))
             return gn, rn_, k + 1
@@ -225,7 +225,7 @@ class Alg:
         return g, jnp.linalg.norm(r, jnp.inf), k
 
     def newton_fixed(self, g0, csn, csp, ce, I, th, k=2):
-        """k passi di Newton pieni (senza line search), per il ROM in ciclo chiuso."""
+        """k full Newton steps (no line search), for the closed-loop ROM."""
         g = g0
         for _ in range(k):
             r = self.residual(g, csn, csp, ce, I, th)
@@ -234,7 +234,7 @@ class Alg:
         return g, jnp.linalg.norm(self.residual(g, csn, csp, ce, I, th), jnp.inf)
 
     def solve_robust(self, gprev, csn, csp, ce, I, th, tol=1e-10):
-        """Newton con warm start; se non converge, riparte dal guess a freddo; se ancora no, continuazione in I. Ritorna il migliore (residuo minimo)."""
+        """Newton with warm start; if it does not converge, restarts from the cold guess; if it still does not, continuation in I. Returns the best (smallest residual)."""
         g, r, k = self.newton(gprev, csn, csp, ce, I, th, tol=tol)
 
         def retry(_):

@@ -14,8 +14,8 @@ from .structjac import Struct
 from .ageing import DX_N
 
 
-LOGIT = {"Rf": (0.5, 12.0), "LAM": (-0.05, 0.4), "Ds": (0.15, 1.3), "LLI": (-0.05, 0.3)}       # range logit (allargato), BRIEF v4 §2.3
-RANGE = {"Rf": (1.0, 10.0), "LAM": (0.0, 0.3), "Ds": (0.3, 1.0), "LLI": (0.0, 0.2)}          # range di aging
+LOGIT = {"Rf": (0.5, 12.0), "LAM": (-0.05, 0.4), "Ds": (0.15, 1.3), "LLI": (-0.05, 0.3)}       # logit range (widened), BRIEF v4 §2.3
+RANGE = {"Rf": (1.0, 10.0), "LAM": (0.0, 0.3), "Ds": (0.3, 1.0), "LLI": (0.0, 0.2)}          # ageing range
 IDX = {"Rf": 0, "LAM": 1, "Ds": 2, "LLI": 3}
 
 
@@ -35,7 +35,7 @@ class EKF:
         self.th_idx = [IDX[c] for c in self.coords if c in IDX]
         self.sign = jnp.array([-1.0 if c == "LAM" else 1.0 for c in self.coords])
 
-    # --- mappe theta
+    # --- theta maps
     def val_of(self, c): return self.lo + (self.hi - self.lo) * jax.nn.sigmoid(c)
 
     def dval_dc(self, c):
@@ -53,7 +53,7 @@ class EKF:
     def em_of(self, th):
         return self.E1, self.G1.at[:, :self.m.Nn].multiply(th[1])
 
-    # --- passo e linearizzazione
+    # --- step and linearization
     def f_and_lin(self, x, I, g_prev):
         m, S, nz, nj = self.m, self.S, self.nz, self.m.nel
         A_ = m.A
@@ -71,11 +71,11 @@ class EKF:
             g, _, _ = m.g_hat(j, csn, csp, ce_, I, th)
             g, res = A_.newton_fixed(g, csn, csp, ce_, I, th, k=1)
             gl = jax.lax.cond(res > self.tol_lin, lambda g_: A_.newton(g_, csn, csp, ce_, I, th, tol=1e-10)[0], lambda g_: g_, g)
-        elif cl == "net0":                                              # M17: rete da sola (k = 0): nessuna iterazione di Newton, nessun completamento; res = ||F||_inf della g della rete
+        elif cl == "net0":                                              # M17: network alone (k = 0): no Newton iteration, no completion; res = ||F||_inf of the network's g
             j = self.net(csn, csp, ce_, I, th)
             g, _, _ = m.g_hat(j, csn, csp, ce_, I, th); gl = g
             res = jnp.linalg.norm(A_.residual(g, csn, csp, ce_, I, th), jnp.inf)
-        elif cl == "net1c":                                             # M17: rete + 1 Newton + completamento fino a convergenza se ||F|| > tol_lin, anche su V e sull'avanzamento di stato (net1 completa solo la linearizzazione); res = ||F|| dopo la sola iterazione
+        elif cl == "net1c":                                             # M17: network + 1 Newton + completion to convergence if ||F|| > tol_lin, also on V and on the state advance (net1 completes the linearization only); res = ||F|| after the single iteration
             j = self.net(csn, csp, ce_, I, th)
             g, _, _ = m.g_hat(j, csn, csp, ce_, I, th)
             g, res = A_.newton_fixed(g, csn, csp, ce_, I, th, k=1)
@@ -90,7 +90,7 @@ class EKF:
         C = S.C_of(Sw)
         dv = self.dval_dc(c) * self.sign                                    # dtheta_full[idx]/dc
         Cth = Sth[:, self.th_idx] * dv[None, :]
-        # dipendenza diretta di Lambda, B (D_s) e G (a_s) dalle coordinate: una tangente per coordinata con effetto diretto
+        # direct dependence of Lambda, B (D_s) and G (a_s) on the coordinates: one tangent per coordinate with a direct effect
         dcols = []
         for i, name in enumerate(self.coords):
             if name in ("Ds", "LAM"):

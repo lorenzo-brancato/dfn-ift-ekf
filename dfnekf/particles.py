@@ -1,8 +1,8 @@
-"""Particella sferica, integratore modale esatto (ZOH sul flusso) + riferimento Crank-Nicolson.
+"""Spherical particle, exact modal integrator (ZOH on the flux) + Crank-Nicolson reference.
 c(r,t) = c_avg + sum_n a~_n(t) * [sin(lam_n r/R) R/(r sin lam_n)] + coda;  tan(lam)=lam.
-Per ogni modo: a~_n' = -kap_n a~_n - (2/R) j/F, kap_n = D lam_n^2/R^2; c_surf = c_avg + sum a~_n + s_tail.
-Coda (n > N_m): modo singolo effettivo s^+ = rho s - (1-rho) W j/F, rho = sum_n w_n e^{-kap_n dt} / W (DC gain esatto
-via sum 1/lam_n^2 = 1/10) -> corregge la risposta superficiale troncata (equiv. alla correzione semi-infinita a tempi brevi)."""
+For each mode: a~_n' = -kap_n a~_n - (2/R) j/F, kap_n = D lam_n^2/R^2; c_surf = c_avg + sum a~_n + s_tail.
+Tail (n > N_m): single effective mode s^+ = rho s - (1-rho) W j/F, rho = sum_n w_n e^{-kap_n dt} / W (exact DC gain
+via sum 1/lam_n^2 = 1/10) -> corrects the truncated surface response (equivalent to the semi-infinite correction at short times)."""
 import numpy as np
 import jax, jax.numpy as jnp
 from scipy.optimize import brentq
@@ -15,14 +15,14 @@ F = 96485.33212
 
 
 def consts(R, D, dt, Nm, K=2):
-    """Costanti del passo. Coda (n > Nm) in K bande geometriche [Nm,2Nm),[2Nm,4Nm),...,[.., inf): un modo effettivo per banda."""
+    """Step constants. Tail (n > Nm) in K geometric bands [Nm,2Nm),[2Nm,4Nm),...,[.., inf): one effective mode per band."""
     lam = LAM[:Nm]
     kap = D * lam ** 2 / R ** 2
     e = jnp.exp(-kap * dt)
     gain = (1 - e) * 2 / (R * kap)                       # a~ <- e a~ - gain * j/F
     edges = [Nm * 2 ** i for i in range(K)] + [NLAM]
     rho, W = [], []
-    Wtot = (2 * R / D) * (0.1 - jnp.sum(1 / lam ** 2))   # guadagno DC totale della coda (esatto)
+    Wtot = (2 * R / D) * (0.1 - jnp.sum(1 / lam ** 2))   # total DC gain of the tail (exact)
     Wexp = 0.0
     for i in range(K):
         lo, hi = edges[i], edges[i + 1]
@@ -30,7 +30,7 @@ def consts(R, D, dt, Nm, K=2):
         kt = D * lt ** 2 / R ** 2
         w = 2 / (R * kt)
         Wi = jnp.sum(w)
-        if i == K - 1:                                   # banda aperta: aggiunge il resto oltre NLAM
+        if i == K - 1:                                   # open band: adds the remainder beyond NLAM
             Wi = Wtot - Wexp
         Wexp = Wexp + Wi
         rho.append(jnp.sum(w * jnp.exp(-kt * dt)) / Wi)
@@ -39,7 +39,7 @@ def consts(R, D, dt, Nm, K=2):
 
 
 def step(state, j, C):
-    """state = (c_avg [nodes], a [Nm,nodes], s [K,nodes]); j [A/m2] sui nodi (ZOH su dt)."""
+    """state = (c_avg [nodes], a [Nm,nodes], s [K,nodes]); j [A/m2] at the nodes (ZOH over dt)."""
     c_avg, a, s = state
     jF = j / F
     c_avg = c_avg - 3.0 / C["R"] * jF * C["dt"]
@@ -53,10 +53,10 @@ def surf(state):
     return c_avg + a.sum(0) + s.sum(0)
 
 
-# ---------------- riferimento Crank-Nicolson (volumi finiti sferici, flusso ZOH)
+# ---------------- Crank-Nicolson reference (spherical finite volumes, ZOH flux)
 def crank_surface(c0, R, D, jseq, dt, nsub=4, Nr=400):
-    """Riferimento a volumi finiti sferici, flusso ZOH. CN con avvio Rannacher (2 sotto-passi di Eulero implicito a ogni
-    salto del flusso) per eliminare il ringing di CN sui gradini. Ritorna c_surf (estrapolata) e c_avg a fine passo."""
+    """Spherical finite-volume reference, ZOH flux. CN with Rannacher start (2 implicit-Euler sub-steps at every
+    flux jump) to remove the CN ringing on steps. Returns c_surf (extrapolated) and c_avg at the end of the step."""
     from scipy.linalg import solve_banded
     h = R / Nr
     re = np.arange(Nr + 1) * h
@@ -80,7 +80,7 @@ def crank_surface(c0, R, D, jseq, dt, nsub=4, Nr=400):
         flux_in = -(j / F) * R ** 2
         rann = (jprev is None) or (j != jprev)
         for m in range(nsub):
-            if rann and m < 4:                             # 4 mezzi-passi impliciti (= 2 sotto-passi)
+            if rann and m < 4:                             # 4 implicit half steps (= 2 sub-steps)
                 dsl = ds / 2
                 for _ in range(2 if m < 2 else 0):
                     rhs = vol * c; rhs[-1] += dsl * flux_in

@@ -1,4 +1,4 @@
-"""Cramer-Rao lower bounds of the ageing parameters from the exact voltage sensitivities (Fig. 5 grey bars, Sec. IV-B, Appendix D).
+"""Cramer-Rao lower bounds of the ageing parameters from the exact voltage sensitivities (Fig. 5 grey bars, Sec. III-B, Appendix D).
 
 Fisher information of a voltage record y_k = V_k(theta) + e_k, e_k ~ N(0, sigma_V^2) independent:  I = sigma_V^-2 sum_k (dV_k/dtheta)^T (dV_k/dtheta),
 with the sensitivities dV_k/dtheta propagated along the trajectory by the structured Jacobians (``sens.traj_sens``, implicit function theorem).

@@ -1,4 +1,4 @@
-"""Fig. 4, Sec. IV-A, Appendix B: computational cost of one filter step versus the state dimension N.
+"""Fig. 4, Sec. III-A, Appendix B: computational cost of one filter step versus the state dimension N.
 
 Medians (and p99, p99.9, worst) of the wall time of ONE call of the jitted step (Python dispatch included), one CPU thread, fixed input I = 5 A, y = 3.7 V:
   * EKF (structured, converged closure with warm start and cold fallback = the filter of the paper) and, for comparison, the EKF with a cold-started closure,
@@ -44,7 +44,7 @@ def parse_points(s):
 
 
 def main():
-    p = cli.parser("Fig. 4, Sec. IV-A, Appendix B (cost)", "median and p99 cost per filter step (EKF, full UKF, UKF-SPMe) versus the state dimension; IDLE MACHINE REQUIRED")
+    p = cli.parser("Fig. 4, Sec. III-A, Appendix B (cost)", "median and p99 cost per filter step (EKF, full UKF, UKF-SPMe) versus the state dimension; IDLE MACHINE REQUIRED")
     p.add_argument("--points", default=None, help="comma-separated 'n/n/n:N_m' (default: the seven points of the paper)")
     p.add_argument("--parts", default="ekf,ukf,spme", help="comma-separated subset of ekf, ukf, spme")
     p.add_argument("--n-ekf", type=int, default=3600); p.add_argument("--n-ukf", type=int, default=100); p.add_argument("--n-spme", type=int, default=600)
