@@ -47,7 +47,7 @@ def parse_spec(s):
     return nn, ns, npp, int(nm), grid
 
 
-def run_row(a, spec):
+def run_row(a, spec, prefix="grid_"):
     import time
     import numpy as np
     import jax
@@ -85,19 +85,21 @@ def run_row(a, spec):
     bias = p - true; res = V - Vref
     row.update(theta_gate=tag, bias_Rf_pct=100 * bias[0] / rng[0], bias_LAM_pct=100 * bias[1] / rng[1], bias_Ds_pct=100 * bias[2] / rng[2], resid_rms_mV=1e3 * float(np.sqrt(np.mean(res ** 2))), iters=len(hist), cpu_s=time.process_time() - c0)
     a.grid = grid
-    path = cli.write_csv(pd.DataFrame([row]), a, f"grid_{label}" + ("_quick" if a.quick else "") + ".csv", note=f"row {label}")
+    path = cli.write_csv(pd.DataFrame([row]), a, f"{prefix}{label}" + ("_quick" if a.quick else "") + ".csv", note=f"row {label}")
     print(row, "->", path, flush=True)
+    return row
 
 
 def main():
     p = cli.parser("Table I, Fig. 3 (grid study)", "model error and batch-fit bias versus grid and number of modes at th2")
-    p.add_argument("--rows", default="all", help="'all' (the four rows of Table I), 'extended' (all eight combinations) or a row name: " + ", ".join(ROWS))
+    p.add_argument("--rows", default="all", help="'all' (the four rows of Table I), 'extended' (all eight combinations), 'modes' (8 against 12 modes on the 10/5/10 uniform grid, Sec. III-D) or a row name: " + ", ".join(ROWS))
     p.add_argument("--grid-spec", default=None, help="one custom row 'n_neg/n_sep/n_pos:N_m:grid', e.g. 20/10/20:12:4:1 (overrides --rows)")
     p.add_argument("--aggregate", action="store_true")
     a = p.parse_args()
     if a.aggregate: return aggregate(a)
     runtime.setup(a.core)
     clock = cli.Clock(a, "grid_study.py")
+    if a.rows == "modes" and not a.grid_spec and not a.quick: return modes(a, clock)
     if a.grid_spec: specs = [parse_spec(a.grid_spec)]
     elif a.quick: specs = [ROWS["10-5-10_Nm8_uniform"]]
     elif a.rows == "all": specs = [ROWS[k] for k in TABLE_ROWS]
@@ -105,6 +107,18 @@ def main():
     elif a.rows in ROWS: specs = [ROWS[a.rows]]
     else: raise SystemExit(f"unknown row {a.rows!r}")
     for s in specs: run_row(a, s)
+    clock.log()
+
+
+def modes(a, clock):
+    """Number of modes against grid (Sec. III-D): the coarsest grid (10/5/10, uniform) with 8 and with 12 modes, same procedure as Table I.
+    Writes <results>/modes_10-5-10_uniform.csv (one row per N_m plus the change of the bias in percentage points); the per-row files use the prefix modes_, so the aggregate of Table I does not see them."""
+    import pandas as pd
+    rows = [run_row(a, ROWS[k], prefix="modes_") for k in ("10-5-10_Nm8_uniform", "10-5-10_Nm12_uniform")]
+    D = pd.DataFrame(rows); a.grid = "uniform"
+    for c in ("bias_Rf_pct", "bias_LAM_pct", "bias_Ds_pct", "E_V_1C_mV", "E_V_3C_mV"): D["d_" + c] = D[c] - D[c].iloc[0]
+    print(D[["Nm", "E_V_1C_mV", "E_V_3C_mV", "bias_Rf_pct", "bias_LAM_pct", "bias_Ds_pct", "d_bias_Ds_pct"]].round(3).to_string())
+    print(cli.write_csv(D, a, "modes_10-5-10_uniform.csv", note="10/5/10 uniform grid, 8 and 12 particle modes (d_* = change with respect to the first row)"))
     clock.log()
 
 

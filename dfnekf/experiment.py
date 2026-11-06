@@ -32,10 +32,10 @@ class Case:
         self.nth = len(coords); self.nz = self.m.nz
         self.true_vals = np.array([{"Rf": self.r["Rf"], "LAM": self.r["LAM"], "Ds": self.r["Ds"]}[c] for c in coords])
         self.range = np.array([TH_RANGE[c][1] - TH_RANGE[c][0] for c in coords])
-        # LLI nota: fissata per i filtri nello stato iniziale (z0 effettivo)
+        # LLI is known and fixed in the filters (it enters through the initial state, the effective z0)
 
     def offsets(self, i, mag=0.4):
-        """theta_0 = theta_vero + offset uniforme in +-40 % del range (seme 200 + i), ritagliato nel range di aging (non nel range logit: evita di partire in saturazione della sigmoide)."""
+        """theta_0 = true theta + uniform offset of +-40 % of the range (seed 200 + i), clipped to the ageing range (not to the logit range: this avoids starting in the saturation of the sigmoid)."""
         rng = np.random.default_rng(200 + i); off = rng.uniform(-mag, mag, self.nth) * self.range
         lo = np.array([TH_RANGE[c][0] for c in self.coords]); hi = np.array([TH_RANGE[c][1] for c in self.coords])
         return np.clip(self.true_vals + off, lo, hi)
@@ -43,8 +43,8 @@ class Case:
     def x0_P0_Q(self, th0, p0_scale=1.0, qth_scale=1.0):
         ek, m = self.ek, self.m; nel = m.nel
         c0 = ek.coord_of(th0); dc = np.asarray(ek.dval_dc(jnp.asarray(c0)))                     # dtheta/dc
-        sig_th = 0.3 * self.range * p0_scale                                                      # 30 % del range in unita' theta
-        q_th = 1e-4 * self.range * np.sqrt(self.dt) * qth_scale                                   # random walk 1e-4 del range al passo (dt = 1 s), scalato per sqrt(dt)
+        sig_th = 0.3 * self.range * p0_scale                                                      # 30 % of the range, in theta units
+        q_th = 1e-4 * self.range * np.sqrt(self.dt) * qth_scale                                   # random walk of 1e-4 of the range per step at dt = 1 s, scaled by sqrt(dt)
         x0 = np.concatenate([self.z0, c0])
         P0d = np.concatenate([np.full(nel, 10.0), np.full(m.Nm * nel, 1.0), np.full(m.K * nel, 1.0), np.full(m.N, 3.0), sig_th / dc])
         Qd = np.concatenate([np.zeros(m.nz), q_th / dc])
@@ -92,16 +92,16 @@ def summarize(case, filt, i, th0, H, wall, name_extra=""):
     if "nees2" in H: res["nees_RfDs_mean"] = float(np.nanmean(np.asarray(H["nees2"])))
     if filt == "ekf":
         res["extra_newton_frac"] = float(np.mean(np.asarray(H["need"]))); res["posdef_all"] = bool(np.all(H["posdef"])); res["minDiagP"] = float(np.min(H["minDiagP"]))
-    # NEES marginale (R_f, D_s): 2 g.d.l.
+    # marginal NEES of (R_f, D_s): 2 degrees of freedom
     if filt == "ekf" and "sd_c" in H:
         pass
-    # distanza dal bordo logit nei primi 60 s
+    # distance from the logit boundary during the first 60 s
     lo = np.array([LOGIT[c][0] for c in case.coords]); hi = np.array([LOGIT[c][1] for c in case.coords])
     k60 = int(60 / case.dt); frac = np.minimum(v[:k60] - lo, hi - v[:k60]) / (hi - lo)
     res["min_dist_logit_edge_first60s"] = float(frac.min()); res["touch_edge_first60s"] = bool(frac.min() < 0.01)
     if not case.twin:
         eta = np.asarray(H["eta"]); res["eta_rms_mV"] = float(1e3 * np.sqrt(np.mean((eta - case.eta_ref()) ** 2)))
-    # serie salvate
+    # saved series
     out = dict(vals=v, nees=nees)
     if "resMax" in H:
         out["resMax"] = np.asarray(H["resMax"]); res.update(resSigma_max=float(np.max(H["resMax"])), resSigma_median=float(np.median(H["resMax"])), resSigma_p99=float(np.quantile(H["resMax"], .99)))
@@ -115,7 +115,7 @@ def summarize(case, filt, i, th0, H, wall, name_extra=""):
 
 
 def run_spme(case, i, p0_scale=1.0, qth_scale=1.0, name_extra=""):
-    """UKF-SPMe (stesso theta, stesse P0/Q, stesso rumore) su un caso PyBaMM."""
+    """UKF on the SPMe (same theta, same P0/Q, same noise) for a PyBaMM case."""
     from .spme import SPMe, UKFSPMe
     ek = case.ek; sp = SPMe(case.m, ek); uk = UKFSPMe(sp); m = case.m
     th0 = case.offsets(i); c0 = ek.coord_of(th0); dc = np.asarray(ek.dval_dc(jnp.asarray(c0)))

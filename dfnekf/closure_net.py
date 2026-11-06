@@ -5,6 +5,7 @@ j = raw + (target - sum_k w_k raw_k) per electrode, with w_k the normalized cell
 (the width weighting matters on the non-uniform 4:1 grid; with the plain mean the constraint is wrong there).
 Architecture: field branch (MLP), scalar branch (MLP), trunk on the normalized cell centres; 56802 trainable parameters at p = 64.
 """
+import os
 import pickle
 from dataclasses import dataclass
 import numpy as np
@@ -143,6 +144,18 @@ def train(cfg, D, tr, va, iters=20000, batch=512, lr0=1e-3, lr1=1e-5, seed=0, p=
             hist.append((it, float(l), float(np.median(e)), float(np.quantile(e, 0.99))))
             print(f"it {it} loss {float(l):.3e} val median {np.median(e):.4f} p99 {np.quantile(e, 0.99):.4f}", flush=True)
     return params, norm, hist
+
+
+ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+
+def default_net_path(results, grid="4:1"):
+    """Network used when no ``--net`` is given: the one trained in ``<results>`` by ``scripts/train_closure.py`` if it is there, otherwise the weights shipped with
+    the package (``dfnekf/assets/closure_4to1.pkl``, trained for the manuscript; 4:1 grid only)."""
+    tag = "4to1" if grid == "4:1" else "uniform"
+    local = os.path.join(results, f"closure_{tag}.pkl")
+    shipped = os.path.join(ASSET_DIR, f"closure_{tag}.pkl")
+    return local if os.path.exists(local) or not os.path.exists(shipped) else shipped
 
 
 def load_net(path, grid="4:1", Nn=20, Ns=10, Np=20):

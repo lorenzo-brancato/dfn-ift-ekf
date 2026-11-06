@@ -13,7 +13,7 @@ Per-run CSV: <results>/twin_<ekf|ukf<k>>[_uniform][_p0rf<s>][_relinit]_<state>_s
 static_mc.py and <results>/tables/tab_cost_jax_m17.csv if present), tab_appD.csv (numbers of Appendix D); in <results>/source_data: fig_nees.csv (Fig. 6), fig_nees_m17.csv.
 
   python scripts/twin_nees.py --grid 4:1 --states th1,th2 --seeds 0-19 --results results                   # EKF, ~6 min per run
-  python scripts/twin_nees.py --grid 4:1 --filter ukf --closure-iters 1 --states th2 --seeds 0-19 ...          # full UKF, ~46 min per run
+  python scripts/twin_nees.py --grid 4:1 --filter ukf --closure-iters 1 --states th2 --seeds 0-19 ...          # full UKF, about 50 min per run alone, 100 min with five processes at once
   python scripts/twin_nees.py --grid 4:1 --states th1 --p0-scale-rf 2 ...;  --init-error relative ...;  --grid uniform --states th1 ...
   python scripts/twin_nees.py --aggregate --results results
   python scripts/twin_nees.py --quick

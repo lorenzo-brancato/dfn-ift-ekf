@@ -36,6 +36,7 @@ def stages(a):
     jobs["model"] += [job("jacobian_agreement", "jacobian_check", *g, "--parts", "agreement"), job("model_checks", "model_checks", *g, "--parts", "algebra,vt,lithium,statements", "--with-pybamm"),
                       job("crlb", "crlb", *g, "--states", ",".join(STATES), "--protocols", "P6Lx2")]
     jobs["model"] += [job(f"grid_{r}", "grid_study", *g, "--rows", r) for r in ["10-5-10_Nm8_uniform", "20-10-20_Nm12_uniform", "40-20-40_Nm16_uniform", "20-10-20_Nm12_nu4"]]
+    jobs["model"].append(job("grid_modes", "grid_study", *g, "--rows", "modes"))
     jobs["model"] += [job(f"bias_{t}", "bias", *g, "--states", t) for t in STATES]
     # static Monte Carlo (EKF, five states, ten seeds)
     jobs["static"] += [job(f"static_ekf_{t}", "static_mc", *g, "--states", t, "--seeds", "0-9") for t in STATES]

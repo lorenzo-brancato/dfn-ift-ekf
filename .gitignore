@@ -12,3 +12,5 @@ paper/*.out
 paper/*.pdf
 build/
 *.egg-info/
+!paper/figures/data/
+!dfnekf/assets/*.pkl

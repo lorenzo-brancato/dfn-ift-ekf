@@ -1,0 +1,5 @@
+x,grid,panel_a_E_V_1C_mV,panel_a_E_V_3C_mV,panel_b_bias_Rf_signed_pct_of_range,panel_b_bias_LAM_signed_pct_of_range,panel_b_bias_Ds_signed_pct_of_range,panel_b_abs_bias_Rf_pct_of_range,panel_b_abs_bias_LAM_pct_of_range,panel_b_abs_bias_Ds_pct_of_range
+0,20/10/20 4:1 N_m=12,0.0308733,0.600192,-0.896671,-0.103285,-1.26236,0.896671,0.103285,1.26236
+1,10/5/10 N_m=8,2.30413,3.5377,6.0773,-0.593461,-9.20656,6.0773,0.593461,9.20656
+2,20/10/20 N_m=12,1.06675,1.55055,2.59029,-0.318803,-4.88777,2.59029,0.318803,4.88777
+3,40/20/40 N_m=16,0.397491,0.491509,0.437321,-0.176727,-2.56431,0.437321,0.176727,2.56431

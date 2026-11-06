@@ -42,7 +42,7 @@ def runs_above(flag, dt):
 
 def main():
     p = cli.parser("Fig. 11, Appendix E (residual certificate)", "residual of the learned closure after one Newton iteration in a stress case outside the ageing range")
-    p.add_argument("--net", default=None, help="trained network (default <results>/closure_4to1.pkl)")
+    p.add_argument("--net", default=None, help="trained network (default <results>/closure_4to1.pkl if present, else the weights shipped in dfnekf/assets)")
     a = p.parse_args()
     runtime.setup(a.core)
     import numpy as np, pandas as pd, jax, jax.numpy as jnp
@@ -50,8 +50,8 @@ def main():
     from dfnekf.step import DFN
     from dfnekf.protocols import current_series
     if a.quick: a.results = os.path.join(a.results, "quick")
-    net_file = a.net or os.path.join(a.results, "closure_4to1.pkl" if a.grid == "4:1" else "closure_uniform.pkl")
-    if not os.path.exists(net_file): raise SystemExit(f"network file {net_file} not found: run scripts/train_closure.py first (or give --net)")
+    net_file = a.net or cn.default_net_path(a.results, a.grid)
+    if not os.path.exists(net_file): raise SystemExit(f"network file {net_file} not found: run scripts/train_closure.py or give --net")
     clock = cli.Clock(a, "residual_stress.py")
     net = cn.load_net(net_file, a.grid)[0]
     m = DFN(prm.base(), 20, 10, 20, 12, 2, DT, a.grid); A_ = m.A

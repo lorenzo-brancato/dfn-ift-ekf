@@ -7,7 +7,7 @@ R_f, LAM_n, D_s estimated with LLI fixed, guard on, ten noise sequences: measure
   net1c  network + one Newton iteration + completion (voltage, state advance and linearization) when the residual exceeds 1e-4: the 'network + 1 Newton' row of Table VIII
   warm   converged Newton, warm start from the previous step with fallback to a cold start (the closure used for all results of the paper)
   cold   converged Newton from a fixed cold guess
-The network is the one trained by ``scripts/train_closure.py`` (``--net``, default ``<results>/closure_4to1.pkl``).
+The network is the one trained by ``scripts/train_closure.py`` (``--net``; default: ``<results>/closure_4to1.pkl`` if it exists, otherwise the weights shipped in ``dfnekf/assets``).
 
 Four kinds of jobs:
   filter runs   (default)   one run = one (closure, seed); outputs <results>/ablation_<closure>_s<seed>.csv and <results>/traj/ablation_<closure>_s<seed>.npz (all histories)
@@ -45,7 +45,8 @@ THRESHOLD = 1e-4                                                            # co
 
 
 def net_path(args):
-    return args.net or os.path.join(args.results, "closure_4to1.pkl" if args.grid == "4:1" else "closure_uniform.pkl")
+    from dfnekf import closure_net as cn
+    return args.net or cn.default_net_path(args.results, args.grid)
 
 
 # ----------------------------------------------------------------------------------------------------------------------- filter runs
@@ -268,7 +269,7 @@ def aggregate(args):
 def main():
     p = cli.parser("Appendix E, Table VIII (learned-closure ablation)", "filter runs with five closures on F6 at th2, open-loop checks, step cost and the table", seeds="0-9", states="th2")
     p.add_argument("--closures", default=",".join(CLOSURES), help="comma-separated subset of " + ", ".join(CLOSURES))
-    p.add_argument("--net", default=None, help="trained network (default <results>/closure_4to1.pkl)")
+    p.add_argument("--net", default=None, help="trained network (default <results>/closure_4to1.pkl if present, else the weights shipped in dfnekf/assets)")
     p.add_argument("--resume", action="store_true", help="skip runs whose trajectory file exists")
     p.add_argument("--openloop", action="store_true", help="open-loop checks and Newton iteration statistics instead of filter runs")
     p.add_argument("--cost", action="store_true", help="step-cost measurement (idle machine, one core)")

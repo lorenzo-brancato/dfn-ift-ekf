@@ -5,16 +5,14 @@
   ytick={1,10,100}, yticklabels={1,10,100},
   xlabel={state dimension $N$}, ylabel={step cost (ms)}, legend style={at={(0.02,0.98)}, anchor=north west}]
 \draw[cGrey, line width=0.3pt, dash pattern=on 1pt off 1pt] (axis cs:150,10) -- (axis cs:950,10);
-\addplot[cGB, line width=0.8pt, mark=*, mark size=1.4pt] table[x=state_dimension_N, y=median_step_cost_ms, col sep=comma] {figures/data/cost_EKF.csv};
-\addplot[only marks, cBlu, mark=diamond*, mark size=2pt] table[x=state_dimension_N, y=median_step_cost_ms, col sep=comma] {figures/data/cost_UKF_full.csv};
+% value labels are generated from the data (nodes near coords), so they follow the CSV when the timings change
+\addplot[cGB, line width=0.8pt, mark=*, mark size=1.4pt, nodes near coords, point meta=y,
+  every node near coord/.style={anchor=north west, font=\tiny, inner sep=1pt, text=cGB!80!black, /pgf/number format/.cd, fixed, precision=2}]
+  table[x=state_dimension_N, y=median_step_cost_ms, col sep=comma] {figures/data/cost_EKF.csv};
+\addplot[only marks, cBlu, mark=diamond*, mark size=2pt, nodes near coords, point meta=y,
+  every node near coord/.style={anchor=east, font=\tiny, inner sep=1.5pt, text=cBlu!80!black, /pgf/number format/.cd, fixed, precision=0}]
+  table[x=state_dimension_N, y=median_step_cost_ms, col sep=comma] {figures/data/cost_UKF_full.csv};
 \legend{grey-box EKF, UKF on the same model}
 \node[anchor=south west, font=\footnotesize, text=black!60] at (axis cs:155,10.5) {10 ms};
-\node[anchor=north west, font=\tiny, inner sep=1pt, text=cGB!80!black] at (axis cs:168,0.638) {0.64};
-\node[anchor=north west, font=\tiny, inner sep=1pt, text=cGB!80!black] at (axis cs:248,1.277) {1.28};
-\node[anchor=north west, font=\tiny, inner sep=1pt, text=cGB!80!black] at (axis cs:328,1.813) {1.81};
-\node[anchor=north west, font=\tiny, inner sep=1pt, text=cGB!80!black] at (axis cs:493,4.05) {4.05};
-\node[anchor=north west, font=\tiny, inner sep=1pt, text=cGB!80!black] at (axis cs:653,7.94) {7.94};
-\node[anchor=south east, font=\tiny, inner sep=1pt, text=cGB!80!black] at (axis cs:813,11.9) {11.9};
-\node[anchor=east, font=\tiny, inner sep=1.5pt, text=cBlu!80!black] at (axis cs:653,287) {287};
 \end{axis}
 \end{tikzpicture}
