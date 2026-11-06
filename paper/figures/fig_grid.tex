@@ -1,7 +1,7 @@
 % Effect of the spatial grid (value labels written from data/grid.csv). Data: data/grid.csv (all panels: mid-aged cell th2, M17)
 \begin{tikzpicture}
 \begin{groupplot}[paper, group style={group size=1 by 2, vertical sep=5mm, group name=g, x descriptions at=edge bottom},
-  width=60mm, height=20mm, xmin=-0.6, xmax=3.6, xtick={0,1,2,3},
+  width=60mm, height=20mm, y label style={at={(axis description cs:-0.09,0.5)}, anchor=south}, xmin=-0.6, xmax=3.6, xtick={0,1,2,3},
   xticklabels={{10/5/10\\unif.}, {20/10/20\\unif.}, {40/20/40\\unif.}, {20/10/20\\4:1}}, x tick label style={align=center},
   xlabel={grid (cells: negative / separator / positive)}, xticklabel style={align=center}, /pgf/bar width=5pt,
   legend style={at={(0.98,0.97)}, anchor=north east, fill=none}, legend columns=3,
