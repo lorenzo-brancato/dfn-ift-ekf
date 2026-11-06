@@ -9,7 +9,7 @@ authors:
     given-names: Lorenzo
     affiliation: "Dipartimento di Meccanica, Politecnico di Milano"
   - family-names: Harej
-    given-names: Alexander
+    given-names: "Alexander Gabriel"
     affiliation: "Dipartimento di Meccanica, Politecnico di Milano"
   - family-names: Giglio
     given-names: Marco
@@ -24,7 +24,7 @@ preferred-citation:
     - family-names: Brancato
       given-names: Lorenzo
     - family-names: Harej
-      given-names: Alexander
+      given-names: "Alexander Gabriel"
     - family-names: Giglio
       given-names: Marco
     - family-names: Cadini

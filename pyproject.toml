@@ -9,7 +9,7 @@ description = "Extended Kalman filtering on the full Doyle-Fuller-Newman model v
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11,<3.12"
-authors = [{ name = "Lorenzo Brancato" }, { name = "Alexander Harej" }, { name = "Marco Giglio" }, { name = "Francesco Cadini" }]
+authors = [{ name = "Lorenzo Brancato" }, { name = "Alexander Gabriel Harej" }, { name = "Marco Giglio" }, { name = "Francesco Cadini" }]
 # versions used for the manuscript (Python 3.11.15)
 dependencies = [
     "jax==0.10.2",

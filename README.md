@@ -4,7 +4,7 @@ https://github.com/lorenzo-brancato/dfn-ift-ekf
 
 **How to cite:** see [`CITATION.cff`](CITATION.cff).
 
-Code of the manuscript *Extended Kalman Filtering on the Full Doyle–Fuller–Newman Model via the Implicit Function Theorem* (L. Brancato, A. Harej, M. Giglio, F. Cadini; draft v0.8, IEEE Transactions on Control Systems Technology).
+Code of the manuscript *Extended Kalman Filtering on the Full Doyle–Fuller–Newman Model via the Implicit Function Theorem* (L. Brancato, A. G. Harej, M. Giglio, F. Cadini; draft v0.8, IEEE Transactions on Control Systems Technology).
 
 The package `dfnekf` is a grey-box DFN model for the LG M50 cell (Chen2020 parameters): diffusion in the particles (12 exponential modes plus a two-term tail) and in the electrolyte is integrated exactly; the kinetics closure (130 algebraic equations) is solved by Newton's method; the step derivative comes from the implicit function theorem. On top of it: an EKF in logit coordinates with a state guard, a square-root UKF on the same model, a UKF on the SPMe (the baseline), the Cramér–Rao bound, the closed-loop experiments of the paper and the learned closure (MIONet) with its residual certificate.
 
