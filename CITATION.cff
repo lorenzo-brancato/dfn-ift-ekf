@@ -3,6 +3,7 @@ message: "If you use this code, please cite the manuscript below."
 title: "dfn-ift-ekf: code for Extended Kalman Filtering on the Full Doyle-Fuller-Newman Model via the Implicit Function Theorem"
 type: software
 license: MIT
+repository-code: "https://github.com/lorenzo-brancato/dfn-ift-ekf"
 authors:
   - family-names: Brancato
     given-names: Lorenzo
