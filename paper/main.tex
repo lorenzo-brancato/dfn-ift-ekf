@@ -1,5 +1,5 @@
 % ------------------------------------------------------------------
-% Draft v0.8, 5 November 2026 -- IEEE Transactions on Control Systems Technology (regular paper).
+% Submitted manuscript, November 2026 -- IEEE Transactions on Control Systems Technology (regular paper).
 % IEEEtran journal, two columns. All figures are pgfplots/TikZ (figures/*.tex) with data in figures/data/*.csv.
 % Compile with pdfLaTeX (two passes; the bibliography is inline).
 % ------------------------------------------------------------------
@@ -28,14 +28,14 @@
 
 \title{Extended Kalman Filtering on the Full Doyle--Fuller--Newman Model via the Implicit Function Theorem: Plating-Potential Estimation and Ageing Tracking}
 
-\author{Lorenzo~Brancato, Alexander~Gabriel~Harej, Marco~Giglio, and Francesco~Cadini\thanks{L. Brancato, A. G. Harej, M. Giglio and F. Cadini are with the Dipartimento di Meccanica, Politecnico di Milano, 20156 Milan, Italy (corresponding author: F. Cadini, e-mail: francesco.cadini@polimi.it).}\thanks{Working draft v0.8, 3 November 2026.}}
+\author{Lorenzo~Brancato, Alexander~Gabriel~Harej, Marco~Giglio, and Francesco~Cadini\thanks{This work received no external funding.}\thanks{L. Brancato, A. G. Harej, M. Giglio and F. Cadini are with the Department of Mechanical Engineering, Politecnico di Milano, Via La Masa 1, 20156 Milan, Italy (corresponding author: F. Cadini, e-mail: francesco.cadini@polimi.it).}}
 
-\markboth{IEEE Transactions on Control Systems Technology --- draft}{Brancato \emph{et al.}: Extended Kalman filtering on the full DFN model}
+\markboth{IEEE Transactions on Control Systems Technology}{Brancato \emph{et al.}: Extended Kalman filtering on the full DFN model}
 
 \maketitle
 
 \begin{abstract}
-A battery management system must charge lithium-ion cells fast without plating lithium and know how far each cell has aged, yet it measures only current, voltage and temperature. Full-order electrochemical models describe the internal potentials that decide plating, but are rarely used online, because an extended Kalman filter needs the derivative of every model step and the model hides an iterative solver. We split the Doyle--Fuller--Newman model into a linear part, diffusion in particles and electrolyte, which we integrate exactly, and a small nonlinear part, the reaction kinetics, which Newton's method solves. The implicit function theorem then gives the exact step derivative almost for free. The resulting filter, with 653 states, takes 7.9 ms per step, 36 times less than an unscented filter on the same model and code. Against an independent high-resolution simulation, it tracks the plating potential at the separator within 0.6 mV during 2C charge pulses, where a filter on the single particle model with electrolyte errs by up to 23.8 mV (medians), and detects the onset of plating conditions during a 1C charge within seconds, not minutes. It estimates three ageing parameters within 1.1\% of their range for aged cells and, in a 294-hour simulated ageing run, tracks resistance growth and the losses of active material and lithium for 178 hours when read before the constant-voltage phase; near full charge, a sub-millivolt model error is mistaken for ageing. A test design that separates identifiability, model bias and filter consistency traces most remaining errors to their cause.
+A battery management system must charge lithium-ion cells fast without plating lithium and know how far each cell has aged, yet it measures only current, voltage and temperature. Full-order electrochemical models describe the internal potentials that decide plating, but are rarely used online, because an extended Kalman filter needs the derivative of every model step and the model hides an iterative solver. We split the Doyle--Fuller--Newman model into a linear part, diffusion in particles and electrolyte, which we integrate exactly, and a small nonlinear part, the reaction kinetics, which Newton's method solves. The implicit function theorem then gives the exact step derivative almost for free. The resulting 653-state filter takes 7.9 ms per step, 36 times less than an unscented filter on the same model. Against a high-resolution reference simulation, it tracks the plating potential at the separator within 0.6 mV during 2C charge pulses, where a filter on the single particle model with electrolyte errs by up to 23.8 mV (medians), and detects the onset of plating conditions during a 1C charge within seconds, not minutes. It estimates three ageing parameters within 1.1\% of their range for aged cells and, in a 294-hour simulated ageing run, tracks resistance growth and active-material and lithium losses for 178 hours when read before the constant-voltage phase; near full charge, a sub-millivolt model error is mistaken for ageing. A test design that separates identifiability, model bias and filter consistency traces most remaining errors to their cause.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -446,8 +446,6 @@ Cold start & 0 & --- & $-$1.45/$-$0.15/$-$0.45 & 8.70\\
 \section*{Data and Code Availability}
 Code that regenerates every result, reference simulations included, is on GitHub under the MIT license: \url{https://github.com/lorenzo-brancato/dfn-ift-ekf}.
 
-\section*{Acknowledgment}
-\todo{Funding and acknowledgements.}
 
 % ===================================================================
 \begin{thebibliography}{99}

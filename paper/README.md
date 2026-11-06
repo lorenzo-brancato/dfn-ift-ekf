@@ -1,6 +1,6 @@
 # Extended Kalman Filtering on the Full Doyle–Fuller–Newman Model via the Implicit Function Theorem
 
-L. Brancato, A. Harej, M. Giglio, F. Cadini — draft v0.8 (3 November 2026), IEEE Transactions on Control Systems Technology.
+L. Brancato, A. G. Harej, M. Giglio, F. Cadini — submitted to IEEE Transactions on Control Systems Technology.
 
 - `main.tex`: manuscript (body, appendices and inline bibliography in one file).
 - `IEEEtran.cls`: IEEE class file.
