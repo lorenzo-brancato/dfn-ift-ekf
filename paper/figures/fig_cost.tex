@@ -5,9 +5,14 @@
   ytick={1,10,100}, yticklabels={1,10,100},
   xlabel={state dimension $N$}, ylabel={step cost (ms)}, legend style={at={(0.02,0.98)}, anchor=north west}]
 \draw[cGrey, line width=0.3pt, dash pattern=on 1pt off 1pt] (axis cs:150,10) -- (axis cs:950,10);
-% value labels are generated from the data (nodes near coords), so they follow the CSV when the timings change
-\addplot[cGB, line width=0.8pt, mark=*, mark size=1.4pt, nodes near coords, point meta=explicit,
+% value labels are generated from the data (nodes near coords), so they follow the CSV when the timings change;
+% the label of the last EKF point (N_m = 16) sits south east so that it does not touch the marker
+\addplot[cGB, line width=0.8pt, mark=*, mark size=1.4pt] table[x=state_dimension_N, y=median_step_cost_ms, meta=median_step_cost_ms, col sep=comma] {figures/data/cost_EKF.csv};
+\addplot[draw=none, mark=none, forget plot, nodes near coords, point meta=explicit, restrict expr to domain={\thisrow{N_m}}{4:12},
   every node near coord/.style={anchor=north west, font=\tiny, inner sep=1pt, text=cGB!80!black, /pgf/number format/.cd, fixed, precision=2}]
+  table[x=state_dimension_N, y=median_step_cost_ms, meta=median_step_cost_ms, col sep=comma] {figures/data/cost_EKF.csv};
+\addplot[draw=none, mark=none, forget plot, nodes near coords, point meta=explicit, restrict expr to domain={\thisrow{N_m}}{16:16},
+  every node near coord/.style={anchor=south east, font=\tiny, inner sep=1pt, text=cGB!80!black, /pgf/number format/.cd, fixed, precision=2}]
   table[x=state_dimension_N, y=median_step_cost_ms, meta=median_step_cost_ms, col sep=comma] {figures/data/cost_EKF.csv};
 \addplot[only marks, cBlu, mark=diamond*, mark size=2pt, nodes near coords, point meta=explicit,
   every node near coord/.style={anchor=east, font=\tiny, inner sep=1.5pt, text=cBlu!80!black, /pgf/number format/.cd, fixed, precision=0}]
