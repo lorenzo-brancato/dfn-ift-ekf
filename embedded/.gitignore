@@ -1,0 +1,4 @@
+# written by export_model.py (golden files hold measured data) and by the builds
+generated/
+build/
+board/xiao_nrf52840/.pio/

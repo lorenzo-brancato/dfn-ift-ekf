@@ -1,0 +1,62 @@
+# Host tests of the embedded DFN + EKF against the Python golden files.
+#   cmake -S embedded/host -B embedded/build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+#   cmake --build embedded/build -j && ctest --test-dir embedded/build --output-on-failure
+# One set of executables per model folder in embedded/generated/ (export_model.py) and per precision:
+#   <test>_<tag>_d (double), _f (float), _fc (float, closure in double): UD covariance;
+#   _dj, _fj: Joseph covariance (dfnekf's form; in float it loses definiteness, kept for the comparison).
+cmake_minimum_required(VERSION 3.16)
+project(dfn_embedded_host CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+enable_testing()
+
+get_filename_component(EMB "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+set(GEN "${EMB}/generated")
+file(GLOB MODELS RELATIVE "${GEN}" "${GEN}/*/model.h")
+
+if(MSVC)
+  add_compile_options(/W3 /bigobj)
+else()
+  add_compile_options(-Wall -Wno-unused-variable -Wno-unused-function)
+endif()
+
+foreach(M ${MODELS})
+  get_filename_component(TAGDIR "${M}" DIRECTORY)
+  string(REPLACE "-" "_" T "${TAGDIR}")
+  # replay stand-in for every model (float, UD); tests only where export_model.py wrote golden files
+  add_executable(replay_${T} replay_host.cpp)
+  target_include_directories(replay_${T} PRIVATE "${EMB}/include" "${GEN}")
+  target_compile_definitions(replay_${T} PRIVATE DFN_DOUBLE=0 "DFN_MODEL_HEADER=\"${M}\"")
+  if(NOT EXISTS "${GEN}/${TAGDIR}/golden/jac.csv")
+    continue()
+  endif()
+  foreach(P d dj f fj fc)
+    if(P STREQUAL "d")
+      set(DEFS DFN_DOUBLE=1)
+    elseif(P STREQUAL "dj")
+      set(DEFS DFN_DOUBLE=1 DFN_COV_UD=0)
+    elseif(P STREQUAL "f")
+      set(DEFS DFN_DOUBLE=0)
+    elseif(P STREQUAL "fj")
+      set(DEFS DFN_DOUBLE=0 DFN_COV_UD=0)
+    else()
+      set(DEFS DFN_DOUBLE=0 DFN_CLOSURE_DOUBLE=1)
+    endif()
+    foreach(X openloop ekf jacobian)
+      set(EXE "${X}_${T}_${P}")
+      add_executable(${EXE} "test_${X}.cpp")
+      target_include_directories(${EXE} PRIVATE "${EMB}/include" "${GEN}" "${CMAKE_CURRENT_SOURCE_DIR}")
+      target_compile_definitions(${EXE} PRIVATE ${DEFS} "DFN_MODEL_HEADER=\"${M}\"" "DFN_GENERATED_DIR=\"${GEN}\"")
+    endforeach()
+    # CTest: the UD builds (the Joseph builds are references, run by hand: dj matches dfnekf but its P is only
+    # semidefinite; fj goes indefinite in float)
+    if(P STREQUAL "d" OR P STREQUAL "f" OR P STREQUAL "fc")
+      add_test(NAME openloop_${T}_${P} COMMAND openloop_${T}_${P})
+      add_test(NAME ekf_${T}_${P} COMMAND ekf_${T}_${P})
+      add_test(NAME jacobian_${T}_${P} COMMAND jacobian_${T}_${P})
+    endif()
+  endforeach()
+endforeach()
