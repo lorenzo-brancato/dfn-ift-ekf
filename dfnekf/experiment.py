@@ -14,7 +14,7 @@ NAMES = {"Rf": "R_f", "LAM": "LAM_n", "Ds": "D_s"}
 
 
 class Case:
-    def __init__(self, tag, grid, twin=False, proto="P6Lx2", dims=(20, 10, 20, 12), dt=0.5, coords=COORDS, closure="newton", net=None, extra_ek=None, data_dir="data"):
+    def __init__(self, tag, grid, twin=False, proto="P6Lx2", dims=(20, 10, 20, 12), dt=0.5, coords=COORDS, closure="newton", net=None, extra_ek=None, data_dir="data/sim"):
         """tag: ageing state th1..th5; grid: 'uniform' or '4:1' (grey-box model); dims: (Nn, Ns, Np, Nm); data_dir: folder with the PyBaMM references."""
         self.tag, self.twin, self.dt, self.dims, self.grid_name, self.coords = tag, twin, dt, dims, grid, tuple(coords)
         self.grid = dims

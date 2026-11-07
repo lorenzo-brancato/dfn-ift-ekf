@@ -12,9 +12,9 @@ Per-row output: <results>/grid_<n>-<s>-<p>_Nm<Nm>_<uniform|nu4>.csv (columns as 
 taken from <results>/costgrid_4.csv and <results>/costgrid_none.csv written by scripts/cost.py (left empty if they are absent).
 
 Commands (one process per row; wall time of the earlier runs, single thread: 10/5/10: 1.5 min, 20/10/20 uniform 4 min, 20/10/20 4:1 2.5 min, 40/20/40: 7-10 min):
-  python scripts/grid_study.py --rows 10-5-10_Nm8_uniform --data data --results results            (names: see ROWS below)
-  python scripts/grid_study.py --grid-spec 20/10/20:12:4:1 --data data --results results
-  python scripts/grid_study.py --rows all --data data --results results                           (sequential, about 25 min)
+  python scripts/grid_study.py --rows 10-5-10_Nm8_uniform --data data/sim --results results            (names: see ROWS below)
+  python scripts/grid_study.py --grid-spec 20/10/20:12:4:1 --data data/sim --results results
+  python scripts/grid_study.py --rows all --data data/sim --results results                           (sequential, about 25 min)
   python scripts/grid_study.py --aggregate --results results
   python scripts/grid_study.py --quick --results /tmp/grid_quick
 """

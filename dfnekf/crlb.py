@@ -113,7 +113,7 @@ def soc_effect(rows):
 
 
 # ---------------------------------------------------------------- sensitivities along a protocol (needs jax)
-def initial_concentrations(protocol, tag, data_dir="data"):
+def initial_concentrations(protocol, tag, data_dir="data/sim"):
     """Initial uniform concentrations (anode, cathode) of the cell at the start of the protocol for the ageing state ``tag`` (before the LLI shift).
     For the P6L protocols they are read from the stored PyBaMM reference (th3 starts at SOC 0.75, a value that otherwise needs a PyBaMM solve); otherwise from
     ``reference.c0_for_soc`` (tabulated for SOC 0.5 and 1.0; other values need PyBaMM)."""
@@ -132,7 +132,7 @@ def protocol_current(protocol, dt):
     return np.repeat(d1_current(), int(round(1.0 / dt))) if protocol == "D1" else current_series(protocol, dt)
 
 
-def sensitivities(m, theta, protocol, tag, data_dir="data", I=None):
+def sensitivities(m, theta, protocol, tag, data_dir="data/sim", I=None):
     """dV/d(Rf, LAM, LLI, Ds, dc_n0, dc_p0) along the protocol for the model ``m`` (a ``step.DFN``; the grid is the one of the model) at the true state theta = (Rf, LAM, LLI, Ds).
     Returns the array [n_samples, 6]; the initial state is the uniform concentration of the protocol with the anode shifted by LLI."""
     import jax
@@ -148,7 +148,7 @@ def sensitivities(m, theta, protocol, tag, data_dir="data", I=None):
     return np.asarray(f(th, z0, I))
 
 
-def k0_column(m, theta, protocol, tag, data_dir="data", I=None, h=0.02):
+def k0_column(m, theta, protocol, tag, data_dir="data/sim", I=None, h=0.02):
     """Central finite-difference sensitivity of V to the relative anode exchange-current constant k0 (exact closed-loop model, h = 2 %)."""
     import jax
     import jax.numpy as jnp

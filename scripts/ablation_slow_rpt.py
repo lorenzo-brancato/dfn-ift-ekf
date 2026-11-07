@@ -11,8 +11,8 @@ measured sample of the pulses-only run); precv = last sample of the slow charge 
 The reference run (variant with_slow) is the final tracker over the same horizon: read from <tracking>/traj/ageing_track_seed<s>.npz (the full run of ageing_track.py), or recomputed
 with --with-reference (costs as much again).
 
-  python scripts/ablation_slow_rpt.py --grid 4:1 --data data --results results/ablation_slow_rpt --seeds 0 --hours 100 --tracking results/ageing --core 0     # about 5 h CPU (100 h simulated at the ~20 simulated h per CPU h of the tracker)
-  python scripts/ablation_slow_rpt.py --quick --data data --results results/quick       # 0.1 h; tests the skipping mechanism on a window of the pulses
+  python scripts/ablation_slow_rpt.py --grid 4:1 --data data/sim --results results/ablation_slow_rpt --seeds 0 --hours 100 --tracking results/ageing --core 0     # about 5 h CPU (100 h simulated at the ~20 simulated h per CPU h of the tracker)
+  python scripts/ablation_slow_rpt.py --quick --data data/sim --results results/quick       # 0.1 h; tests the skipping mechanism on a window of the pulses
 
 Outputs: traj/ablation_slow_rpt_seed<s>.npz, ablation_slow_rpt.csv (variant x RPT x point: truth, errors, z, corr(Rf, LAM), criteria), ablation_slow_rpt_summary.csv (largest errors per variant and point, RPT >= 1).
 """

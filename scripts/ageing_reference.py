@@ -5,7 +5,7 @@ varying along the electrode, a reference performance test (RPT) every 10 cycles.
 2.5 V, a C/2 charge to 4.2 V and a constant-voltage hold to C/50 (about 7.5 h each). Output: ``<data>/aging_dyn_rptslow_full.npz`` (about 74 MB,
 2.1 million samples at 0.5 s), read by ``dfnekf.ageing.load`` and by the tracking scripts. Expected cost: about 0.7 h on one core, PyBaMM 26.9.
 
-  python scripts/ageing_reference.py --data data [--core 3]
+  python scripts/ageing_reference.py --data data/sim [--core 3]
   python scripts/ageing_reference.py --quick --results results/quick      # RPT + one ageing cycle (a few minutes)
 
 The grid option of the common command line is irrelevant here (the reference is the full PyBaMM DFN) and is ignored.

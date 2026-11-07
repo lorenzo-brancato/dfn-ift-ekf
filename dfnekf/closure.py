@@ -31,6 +31,9 @@ class Alg:
     def __init__(self, P, Nn, Ns, Np, edge_avg="linear", cinv="inv_mean", grid_ratio=None, smooth_sat=False):
         self.smooth_sat = smooth_sat
         self.P, self.Nn, self.Ns, self.Np = P, Nn, Ns, Np
+        # cell set: OCPs, temperature and series resistance from P when given (another cell than Chen2020), else the defaults
+        self.T = float(P.get("T", T))
+        self.Un, self.Up = P.get("ocp_n", U_n), P.get("ocp_p", U_p)
         self.cinv_mode = cinv
         N = Nn + Ns + Np
         self.N = N
@@ -60,7 +63,7 @@ class Alg:
         Kd = P["kappa"] * tor_e / dxe
         self.Kd = Kd
         self.A_e = -Dm @ (Kd[:, None] * Gm)                      # N x N (on phi_e)
-        self.chi = 2 * R * T * (1 - P["tplus"]) * P["tdf"] / F
+        self.chi = 2 * R * self.T * (1 - P["tplus"]) * P["tdf"] / F
         # electrodes
         def lap(n, w, sig, dirich):
             """Finite-volume operator sigma * (flux balance), face distance = distance between cell centres; Dirichlet at the half cell on the left (anode) or Neumann."""
@@ -114,21 +117,39 @@ class Alg:
         pe_n, pe_p = pe[:self.Nn], pe[self.Nn + self.Ns:]
         tiny = 1e-6
         csp_ = jnp.clip(csp, tiny, P["cmax_p"] - tiny)
-        if self.smooth_sat:                                   # M10 M-sat: anode c_surf upper edge regularised with a softplus at 1e-3 c_max (derivative never zero); lower edge unchanged
+        if P.get("soft_edges"):                               # cell sets: both edges of both electrodes regularised with a softplus at
+            def soft(c, cm):                                  # SAT_EPS c_max, so U and j0 keep depending on c_s (restoring) beyond 0 and c_max
+                e = P.get("soft_eps", SAT_EPS) * cm
+                lo = e * jax.nn.softplus(c / e)
+                return cm - e * jax.nn.softplus((cm - lo) / e)
+            csn_, csp_ = soft(csn, P["cmax_n"]), soft(csp, P["cmax_p"])
+        elif self.smooth_sat:                                   # M10 M-sat: anode c_surf upper edge regularised with a softplus at 1e-3 c_max (derivative never zero); lower edge unchanged
             eps_s = SAT_EPS * P["cmax_n"]; csn_ = P["cmax_n"] - eps_s * jax.nn.softplus((P["cmax_n"] - jnp.maximum(csn, tiny)) / eps_s)
         else:
             csn_ = jnp.clip(csn, tiny, P["cmax_n"] - tiny)
         al = P["alpha"]
         j0n = P["k0_n"] * (jnp.maximum(ce_n, tiny) * csn_ * (P["cmax_n"] - csn_)) ** al
         j0p = P["k0_p"] * (jnp.maximum(ce_p, tiny) * csp_ * (P["cmax_p"] - csp_)) ** al
-        eta_n = sn - pe_n - U_n(csn_ / P["cmax_n"]) - Rf * jn
-        eta_p = sp - pe_p - U_p(csp_ / P["cmax_p"])
-        f = F / (2 * R * T)
+        eta_n = sn - pe_n - self.Un(csn_ / P["cmax_n"]) - Rf * jn
+        eta_p = sp - pe_p - self.Up(csp_ / P["cmax_p"])
+        f = F / (2 * R * self.T)
         return j0n, j0p, eta_n, eta_p, f, a_n, a_p, Rf
 
-    def residual(self, g, csn, csp, ce, I, th):
+    def state_imp(self, g, csn, csp, ce, imp):
+        """Concentrations the closure sees. imp = None: those of the state at the start of the step (explicit coupling,
+        the paper's scheme). imp = (k_n, k_p, E, G) (step.DFN.imp_coeffs): those at the END of the step under the step's
+        own flux j, from the same exact ZOH maps that advance the state: c_s - k j (k = d c_surf / d j over the step) and
+        E c_e + G j. Implicit coupling: stable where the explicit one is not (steep dU/dc_s near an empty anode, fast
+        kinetics with a strongly non-uniform reaction). The state update itself is unchanged."""
+        if imp is None:
+            return csn, csp, ce
+        jn, jp = g[:self.Nn], g[self.Nn:self.Nn + self.Np]
+        return csn - imp[0] * jn, csp - imp[1] * jp, imp[2] @ ce + imp[3] @ g[:self.Nel]
+
+    def residual(self, g, csn, csp, ce, I, th, imp=None):
         """Scaled F(g) (BV rows: A/m2; potential rows: ~V)."""
         P = self.P
+        csn, csp, ce = self.state_imp(g, csn, csp, ce, imp)
         i_cc = I / P["area"]
         jn, jp, pe, sn, sp = self.unpack(g)
         j0n, j0p, eta_n, eta_p, f, a_n, a_p, Rf = self.bv_parts(g, csn, csp, ce, th)
@@ -145,9 +166,18 @@ class Alg:
         r_sp = r_sp.at[-1].add(i_cc)
         return jnp.concatenate([r_bvn, r_bvp, r_e * self.s_e, r_sn * self.s_sn, r_sp * self.s_sp])
 
-    def jac(self, g, csn, csp, ce, I, th):
-        """Analytical Jacobian (scaled as the residual)."""
+    def jac(self, g, csn, csp, ce, I, th, imp=None):
+        """Analytical Jacobian (scaled as the residual). With imp, plus the dependence on j through the end-of-step
+        concentrations: c_s - k j (diagonal, BV rows) and E c_e + G j (d F / d c_e from JAX, times G)."""
         Nn, Np, Ns, N, Nel = self.Nn, self.Np, self.Ns, self.N, self.Nel
+        if imp is not None:
+            csn, csp, ce = self.state_imp(g, csn, csp, ce, imp)
+
+            def r_bv(cn, cp):
+                j0n, j0p, eta_n, eta_p, f, *_ = self.bv_parts(g, cn, cp, ce, th)
+                return -2 * j0n * jnp.sinh(f * eta_n), -2 * j0p * jnp.sinh(f * eta_p)
+            _, (dn, dp) = jax.jvp(r_bv, (csn, csp), (jnp.ones_like(csn), jnp.ones_like(csp)))   # diagonal: row i sees c_s,i only
+            dF_dce = jax.jacfwd(lambda c: self.residual(g, csn, csp, c, I, th))(ce)               # (ng, N), explicit residual
         j0n, j0p, eta_n, eta_p, f, a_n, a_p, Rf = self.bv_parts(g, csn, csp, ce, th)
         Gn = 2 * f * j0n * jnp.cosh(f * eta_n)       # d(2 j0 sinh(f eta))/d eta
         Gp = 2 * f * j0p * jnp.cosh(f * eta_p)
@@ -171,13 +201,23 @@ class Alg:
         J = J.at[o_sn + jnp.arange(Nn), rn].set(a_n * self.dxn * self.s_sn)
         J = J.at[o_sp:o_sp + Np, o_sp:o_sp + Np].set(self.j_B_p * self.s_sp)
         J = J.at[o_sp + jnp.arange(Np), rp].set(a_p * self.dxp * self.s_sp)
+        if imp is not None:
+            J = J.at[rn, rn].add(-dn * imp[0]).at[rp, rp].add(-dp * imp[1])
+            J = J.at[:, :Nel].add(dF_dce @ imp[3])
         return J
 
-    def V_of(self, g, I):
-        """Voltage: phi_s,p at the right boundary (Neumann: phi_N - dx/2 * i_cc/sigma) - phi_s,n(0)=0."""
+    def V_of(self, g, I, csn=None, csp=None):
+        """Voltage: phi_s,p at the right boundary (Neumann: phi_N - dx/2 * i_cc/sigma) - phi_s,n(0)=0, minus I R_contact
+        (P["R_contact"], default 0). With P["entropic"] = (dT, dUdT0, dUdT_n, dUdT_p) and the surface concentrations
+        given, plus the cell's entropic term dT (dUdT0 + dUdT_n (x_s - 0.5) + dUdT_p (y_s - 0.5)), x_s, y_s their means."""
         P = self.P
         sp = self.unpack(g)[4]
-        return sp[-1] - 0.5 * self.dxp[-1] * (I / P["area"]) / P["sig_p"]
+        V = sp[-1] - 0.5 * self.dxp[-1] * (I / P["area"]) / P["sig_p"] - I * P.get("R_contact", 0.0)
+        ent = P.get("entropic")
+        if ent is not None and csn is not None:
+            dT, d0, dn, dp = ent
+            V = V + dT * (d0 + dn * (jnp.mean(csn) / P["cmax_n"] - 0.5) + dp * (jnp.mean(csp) / P["cmax_p"] - 0.5))
+        return V
 
     # ---- guess and Newton
     def guess(self, csn, csp, I, th):
@@ -186,16 +226,16 @@ class Alg:
         i_cc = I / P["area"]
         jn = jnp.full(self.Nn, 1.0) * i_cc / (a_n * P["Ln"])
         jp = jnp.full(self.Np, -1.0) * i_cc / (a_p * P["Lp"])
-        Un = U_n(csn / P["cmax_n"]); Up = U_p(csp / P["cmax_p"])
+        Un = self.Un(csn / P["cmax_n"]); Up = self.Up(csp / P["cmax_p"])
         un = Un.mean()
         pe = jnp.full(self.N, -un)
         sn = jnp.zeros(self.Nn)
         sp = jnp.full(self.Np, (Up.mean() - un))
         return self.pack(jn, jp, pe, sn, sp)
 
-    def newton(self, g0, csn, csp, ce, I, th, tol=1e-11, maxit=60):
+    def newton(self, g0, csn, csp, ce, I, th, tol=1e-11, maxit=60, imp=None):
         """Newton with backtracking (loop with stopping test): returns g, ||F||, n_iter."""
-        res = lambda g: self.residual(g, csn, csp, ce, I, th)
+        res = lambda g: self.residual(g, csn, csp, ce, I, th, imp)
 
         def cond(s):
             g, r, k = s
@@ -203,7 +243,7 @@ class Alg:
 
         def body(s):
             g, r, k = s
-            J = self.jac(g, csn, csp, ce, I, th)
+            J = self.jac(g, csn, csp, ce, I, th, imp)
             dg = jnp.linalg.solve(J, -r)
             n0 = jnp.linalg.norm(r)
 
@@ -224,31 +264,63 @@ class Alg:
         g, r, k = jax.lax.while_loop(cond, body, (g0, res(g0), 0))
         return g, jnp.linalg.norm(r, jnp.inf), k
 
-    def newton_fixed(self, g0, csn, csp, ce, I, th, k=2):
+    def newton_fixed(self, g0, csn, csp, ce, I, th, k=2, imp=None):
         """k full Newton steps (no line search), for the closed-loop ROM."""
         g = g0
         for _ in range(k):
-            r = self.residual(g, csn, csp, ce, I, th)
-            J = self.jac(g, csn, csp, ce, I, th)
+            r = self.residual(g, csn, csp, ce, I, th, imp)
+            J = self.jac(g, csn, csp, ce, I, th, imp)
             g = g + jnp.linalg.solve(J, -r)
-        return g, jnp.linalg.norm(self.residual(g, csn, csp, ce, I, th), jnp.inf)
+        return g, jnp.linalg.norm(self.residual(g, csn, csp, ce, I, th, imp), jnp.inf)
 
-    def solve_robust(self, gprev, csn, csp, ce, I, th, tol=1e-10):
-        """Newton with warm start; if it does not converge, restarts from the cold guess; if it still does not, continuation in I. Returns the best (smallest residual)."""
-        g, r, k = self.newton(gprev, csn, csp, ce, I, th, tol=tol)
+    def newton_plain(self, g0, csn, csp, ce, I, th, tol=1e-10, maxit=30, imp=None):
+        """Undamped Newton with stopping test (stops on a non-finite residual): returns g, ||F||_inf, n_iter. A fallback for
+        the backtracking Newton, whose monotone 2-norm test can stall in a curved valley where the full steps converge
+        (steep U_n near a full anode at the end of a fast CV charge)."""
+        res = lambda g: self.residual(g, csn, csp, ce, I, th, imp)
+
+        def cond(s):
+            g, r, k = s
+            n = jnp.linalg.norm(r, jnp.inf)
+            return (n > tol) & jnp.isfinite(n) & (k < maxit)
+
+        def body(s):
+            g, r, k = s
+            g = g + jnp.linalg.solve(self.jac(g, csn, csp, ce, I, th, imp), -r)
+            return g, res(g), k + 1
+        g, r, k = jax.lax.while_loop(cond, body, (g0, res(g0), 0))
+        return g, jnp.linalg.norm(r, jnp.inf), k
+
+    def solve_robust(self, gprev, csn, csp, ce, I, th, tol=1e-10, imp=None):
+        """Newton with warm start; if it does not converge, restarts from the cold guess; if it still does not, continuation in I. Returns the best (smallest residual).
+        Cell sets (soft_edges): a non-finite residual counts as not converged, and the undamped Newton from the warm start
+        is tried first among the fallbacks (the paper's sets never reach these branches with a non-finite residual)."""
+        g, r, k = self.newton(gprev, csn, csp, ce, I, th, tol=tol, imp=imp)
+        safe = bool(self.P.get("soft_edges"))
+        better = (lambda a, b: jnp.isfinite(a) & ~(a >= b)) if safe else (lambda a, b: a < b)      # a better than b; NaN b loses to finite a
+        bad = (lambda r_: ~(r_ <= tol)) if safe else (lambda r_: r_ > tol)
 
         def retry(_):
-            g1, r1, k1 = self.newton(self.guess(csn, csp, I, th), csn, csp, ce, I, th, tol=tol)
-            b1 = r1 < r
-            gb, rb, kb = jnp.where(b1, g1, g), jnp.where(b1, r1, r), jnp.where(b1, k1, k)
+            if safe:
+                g0, r0, k0 = self.newton_plain(gprev, csn, csp, ce, I, th, tol=tol, imp=imp)
+                b0 = better(r0, r)
+                g_, r_, k_ = jnp.where(b0, g0, g), jnp.where(b0, r0, r), jnp.where(b0, k0, k)
+            else:
+                g_, r_, k_ = g, r, k
 
-            def cont(_):
-                gg = self.guess(csn, csp, 0.0 * I, th)
-                kk = 0
-                for s_ in (0.05, 0.2, 0.5, 1.0):
-                    gg, rr, k2 = self.newton(gg, csn, csp, ce, s_ * I, th, tol=tol)
-                    kk = kk + k2
-                b2 = rr < rb
-                return jnp.where(b2, gg, gb), jnp.where(b2, rr, rb), jnp.where(b2, kk, kb)
-            return jax.lax.cond(rb > tol, cont, lambda _: (gb, rb, kb), None)
-        return jax.lax.cond(r > tol, retry, lambda _: (g, r, k), None)
+            def cold(_):
+                g1, r1, k1 = self.newton(self.guess(csn, csp, I, th), csn, csp, ce, I, th, tol=tol, imp=imp)
+                b1 = better(r1, r_)
+                gb, rb, kb = jnp.where(b1, g1, g_), jnp.where(b1, r1, r_), jnp.where(b1, k1, k_)
+
+                def cont(_):
+                    gg = self.guess(csn, csp, 0.0 * I, th)
+                    kk = 0
+                    for s_ in (0.05, 0.2, 0.5, 1.0):
+                        gg, rr, k2 = self.newton(gg, csn, csp, ce, s_ * I, th, tol=tol, imp=imp)
+                        kk = kk + k2
+                    b2 = better(rr, rb)
+                    return jnp.where(b2, gg, gb), jnp.where(b2, rr, rb), jnp.where(b2, kk, kb)
+                return jax.lax.cond(bad(rb), cont, lambda _: (gb, rb, kb), None)
+            return jax.lax.cond(bad(r_), cold, lambda _: (g_, r_, k_), None)
+        return jax.lax.cond(bad(r), retry, lambda _: (g, r, k), None)

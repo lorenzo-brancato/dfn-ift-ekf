@@ -12,18 +12,20 @@ def simulate(m: DFN, z0, Iseq, th, k=2, converged_first=True):
     consts = m.part_consts(th)
     em = m.elec_mats(th)
     csn0, csp0, _ = m.surf(z0)
-    g0, _, _ = A_.newton(A_.guess(csn0, csp0, Iseq[0], th), csn0, csp0, z0[m.sl["e"]], Iseq[0], th)
+    g0, _, _ = A_.newton(A_.guess(csn0, csp0, Iseq[0], th), csn0, csp0, z0[m.sl["e"]], Iseq[0], th,
+                         imp=m.imp_coeffs(z0, th, consts, em))
 
     def body(carry, I):
         z, g = carry
         csn, csp, ce = m.surf(z)
+        imp = m.imp_coeffs(z, th, consts, em)          # None unless the cell set asks for the implicit coupling
         if k is None:                                   # converged Newton with line search (warm start)
-            g, _, nit = A_.solve_robust(g, csn, csp, ce, I, th, tol=1e-10)
+            g, _, nit = A_.solve_robust(g, csn, csp, ce, I, th, tol=1e-10, imp=imp)
         else:
-            g = A_.newton_fixed(g, csn, csp, ce, I, th, k=k)[0] if k > 0 else g
+            g = A_.newton_fixed(g, csn, csp, ce, I, th, k=k, imp=imp)[0] if k > 0 else g
             nit = jnp.asarray(k)
-        res = jnp.linalg.norm(A_.residual(g, csn, csp, ce, I, th), jnp.inf)
-        V = A_.V_of(g, I)
+        res = jnp.linalg.norm(A_.residual(g, csn, csp, ce, I, th, imp), jnp.inf)
+        V = A_.V_of(g, I, csn, csp)
         eta, ppl = m.interface(g, csn, th)
         z2 = m.advance(z, g, th, consts, em)
         return (z2, g), dict(V=V, cs_n=csn, cs_p=csp, ce=ce, eta_lit=eta, phi_pl=ppl, resF=res, nit=nit, li=m.lithium(z, th))

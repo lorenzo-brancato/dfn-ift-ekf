@@ -1,7 +1,14 @@
 __pycache__/
 *.pyc
 results/
-data/
+# data: everything ignored except the small cell sets and the dataset READMEs
+data/*
+!data/exp_*/
+data/exp_*/*
+!data/exp_*/README.md
+!data/exp_*/params/
+data/exp_*/params/*
+!data/exp_*/params/*.json
 *.npz
 *.pkl
 .venv/

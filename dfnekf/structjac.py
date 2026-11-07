@@ -26,16 +26,20 @@ class Struct:
         self.ng = m.A.ng
 
     # --- Lambda (particle diagonal) and B (nz x nel) from the step constants
-    def lam_B(self, th, em=None):
+    def lam_B(self, th, em=None, z=None):
+        """With the cathode D_p(y) law (m.dlaw) the cathode constants are per node, at the mean concentrations of z."""
         m = self.m; n, Nn, Np = self.n, m.Nn, m.Np
         Cn, Cp = m.part_consts(th)
+        if m.dlaw is not None:
+            Cp = m.cathode_consts(z[self.ic][Nn:], th)
         E, G = m.elec_mats(th) if em is None else em
-        def per_node(vn, vp):          # vn, vp [...]: anode/cathode -> [..., n]
-            return jnp.concatenate([jnp.repeat(vn[..., None], Nn, -1), jnp.repeat(vp[..., None], Np, -1)], -1)
+        def per_node(vn, vp):          # vn [...] (shared), vp [...] or [..., Np] (per node): anode/cathode -> [..., n]
+            vp = vp if (m.dlaw is not None and jnp.ndim(vp) == jnp.ndim(vn) + 1) else jnp.repeat(vp[..., None], Np, -1)
+            return jnp.concatenate([jnp.repeat(vn[..., None], Nn, -1), vp], -1)
         dvec = jnp.concatenate([jnp.ones(n), per_node(Cn["e"], Cp["e"]).reshape(-1), per_node(Cn["rho"], Cp["rho"]).reshape(-1)])
         Bm = jnp.zeros((m.nz, n))
         cols = jnp.arange(n)
-        bc = jnp.concatenate([jnp.full(Nn, -3 * Cn["dt"] / Cn["R"]), jnp.full(Np, -3 * Cp["dt"] / Cp["R"])]) / FARAD
+        bc = jnp.concatenate([jnp.full(Nn, -3 * Cn["dt"] / Cn["R"]), jnp.full(Np, -3 * Cp["dt"] / Cp["R"])]) / FARAD   # D-free
         Bm = Bm.at[self.ic, cols].set(bc)
         Bm = Bm.at[self.ia, jnp.broadcast_to(cols, self.ia.shape)].set(per_node(-Cn["gain"], -Cp["gain"]) / FARAD)
         Bm = Bm.at[self.is_, jnp.broadcast_to(cols, self.is_.shape)].set(per_node(-(1 - Cn["rho"]) * Cn["W"], -(1 - Cp["rho"]) * Cp["W"]) / FARAD)
@@ -48,23 +52,47 @@ class Struct:
         return L.at[self.ie[:, None], self.ie[None, :]].set(E)
 
     # --- sensitivities of y (j and V) with respect to w and theta at converged g
-    def lu(self, g, z, I, th):
+    def lu(self, g, z, I, th, imp=None):
         m = self.m; csn, csp, ce = m.surf(z)
-        return jsl.lu_factor(m.A.jac(g, csn, csp, ce, I, th))
+        return jsl.lu_factor(m.A.jac(g, csn, csp, ce, I, th, imp))
 
-    def sens(self, lu, g, z, I, th, with_theta=True):
+    def sens(self, lu, g, z, I, th, with_theta=True, imp=None, em_of=None):
+        """imp: the implicit closure's coefficients at (z, th) (step.DFN.imp_coeffs), held in the w-derivative (c_e enters
+        through E c_e + G j); their dependence on theta (D_s, a_s) is in the theta-derivative (em_of(t): E, G at t). The
+        dependence of the cathode's k on its mean concentrations (D_p(y) law) is in sens_kp."""
         m = self.m; A_ = m.A; n, ng = self.n, self.ng
         csn, csp, ce = m.surf(z)
         w = jnp.concatenate([csn, csp, ce]); Nn = m.Nn
-        res_w = lambda w_: A_.residual(g, w_[:Nn], w_[Nn:n], w_[n:], I, th)
+        res_w = lambda w_: A_.residual(g, w_[:Nn], w_[Nn:n], w_[n:], I, th, imp)
         Fw = jax.jacfwd(res_w)(w)                                           # ng x (n + N)
         Esel = jnp.zeros((ng, n + 1)).at[jnp.arange(n), jnp.arange(n)].set(1.0).at[ng - 1, n].set(1.0)
         X = jsl.lu_solve(lu, Esel, trans=1)                                 # J^T X = Esel
         Sw = -X.T @ Fw                                                      # (n+1) x (n+N)
+        if A_.P.get("entropic") is not None:                                # V's direct dependence on c_surf (entropic term)
+            dVc = jax.grad(lambda c_: A_.V_of(g, I, c_[:Nn], c_[Nn:]))(jnp.concatenate([csn, csp]))
+            Sw = Sw.at[n, :n].add(dVc)
         if not with_theta:
             return Sw, None, X
-        Ft = jax.jacfwd(lambda t: A_.residual(g, csn, csp, ce, I, t))(th)   # ng x 3
+        if imp is None:
+            Ft = jax.jacfwd(lambda t: A_.residual(g, csn, csp, ce, I, t))(th)   # ng x 3
+        else:
+            em_of = em_of if em_of is not None else m.elec_mats
+            Ft = jax.jacfwd(lambda t: A_.residual(g, csn, csp, ce, I, t, m.imp_coeffs(z, t, None, em_of(t))))(th)
         return Sw, -X.T @ Ft, X
+
+    def sens_kp(self, X, g, z, I, th, em=None):
+        """(n+1) x Np: dj/dc_avg,p and dV/dc_avg,p through the implicit closure's cathode k (D_p(y) law)."""
+        m = self.m; A_ = m.A; ip = self.ic[m.Nn:]
+        csn, csp, ce = m.surf(z)
+        Fc = jax.jacfwd(lambda c_: A_.residual(g, csn, csp, ce, I, th, m.imp_coeffs(z.at[ip].set(c_), th, None, em)))(z[ip])
+        return -X.T @ Fc
+
+    def dlaw_cols(self, z, g, th, consts=None, em=None):
+        """nz x Np: the step's dependence on the cathode mean concentrations through the D_p(y) law (Lambda and B of the
+        cathode are functions of c_avg,p), at fixed flux. Added to the EKF's low-rank part with selectors of c_avg,p."""
+        m = self.m
+        cp = z[self.ic][m.Nn:]
+        return jax.jacfwd(lambda c_: m.advance(z, g, th, consts, em, cp_law=c_))(cp)
 
     def C_of(self, Sw):
         """(n+1) x nz: rows = j (n) and V; columns = z"""
@@ -75,11 +103,16 @@ class Struct:
     def jac_full(self, z, I, th, g):
         """Dense Jz [nz+1, nz] and Jtheta [nz+1, 3] (rows: z+, V) for the comparison with jacfwd; theta = [Rf, as, Ds] (3 columns)."""
         m = self.m; n = self.n
-        dvec, E, Bm = self.lam_B(th)
-        lu = self.lu(g, z, I, th)
-        Sw, Sth, _ = self.sens(lu, g, z, I, th)
+        dvec, E, Bm = self.lam_B(th, None, z)
+        imp = m.imp_coeffs(z, th)
+        lu = self.lu(g, z, I, th, imp)
+        Sw, Sth, X = self.sens(lu, g, z, I, th, imp=imp)
         C = self.C_of(Sw)
+        if m.dlaw is not None and imp is not None:
+            C = C.at[:, self.ic[m.Nn:]].add(self.sens_kp(X, g, z, I, th))
         Azz = self.lam_dense(dvec, E) + Bm @ C[:n]
+        if m.dlaw is not None:
+            Azz = Azz.at[:, self.ic[m.Nn:]].add(self.dlaw_cols(z, g, th))
         dir_th = jax.jacfwd(lambda t: m.advance(z, g, t))(th)               # direct dependence of Lambda, B, E, G on theta (g fixed)
         Jth_z = Bm @ Sth[:n] + dir_th
         Jz = jnp.concatenate([Azz, C[n:n + 1]], 0)

@@ -16,8 +16,8 @@ with ``numpy.load``; the keys used are:
 If the file is missing the script stops with an error: it is produced by the ageing reference script (see the README), not by this repository's quick tests.
 
 Run:
-    python scripts/protocols_fig.py --data data --results results
-    python scripts/protocols_fig.py --quick --data data --results results      # only the two F6/F6Q traces (no ageing file needed)
+    python scripts/protocols_fig.py --data data/sim --results results
+    python scripts/protocols_fig.py --quick --data data/sim --results results      # only the two F6/F6Q traces (no ageing file needed)
 """
 import os
 import sys

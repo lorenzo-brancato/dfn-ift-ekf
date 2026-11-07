@@ -13,7 +13,7 @@ def parser(item, description, seeds="0-9", states="th1,th2,th3,th4,th5"):
     """ArgumentParser with the common options; ``item`` is the paper item the script reproduces (e.g. 'Fig. 5, Table III')."""
     p = argparse.ArgumentParser(description=f"[{item}] {description}")
     p.add_argument("--grid", default="4:1", choices=["uniform", "4:1"], help="spatial grid of the grey-box model")
-    p.add_argument("--data", default="data", help="folder with the PyBaMM reference simulations")
+    p.add_argument("--data", default="data/sim", help="folder with the PyBaMM reference simulations")
     p.add_argument("--results", default="results", help="output folder")
     p.add_argument("--seeds", default=seeds, help="seed list, e.g. '0-9' or '0,3,5'")
     p.add_argument("--states", default=states, help="ageing states, comma-separated (th1..th5)")

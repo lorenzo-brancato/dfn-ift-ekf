@@ -14,7 +14,7 @@ Per-run output (one file per protocol and state, so the states can be run in sep
 --aggregate writes <results>/tables/crlb_4par.csv (4-parameter table, versions known_state, unknown_soc), crlb_conditional.csv, tab_crlb_soc_m17.csv and <results>/source_data/fig_crlb_m17.csv.
 
 Commands (about 15 s per state and protocol on one core):
-  python scripts/crlb.py --grid 4:1 --states th1,th2,th3,th4,th5 --protocols P6Lx2 --data data --results results
+  python scripts/crlb.py --grid 4:1 --states th1,th2,th3,th4,th5 --protocols P6Lx2 --data data/sim --results results
   python scripts/crlb.py --grid 4:1 --protocols P6Lx2,P6L,P2,D1 --with-k0 --results results       (all protocols of the full table; P2 and D1 need PyBaMM for the initial state of D1)
   python scripts/crlb.py --aggregate --results results
   python scripts/crlb.py --quick --results /tmp/crlb_quick

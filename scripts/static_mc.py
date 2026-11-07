@@ -9,7 +9,7 @@ initial offsets default_rng(200 + seed), +-40 % of the parameter range; EKF on (
 (read from <results>/bias_<state>.csv written by bias.py), p90 and RMSE of the error after bias subtraction, fraction of runs touching the logit edge in the first minute.
 Rows: EKF for the states found, and the UKF row for th2 if its runs are present.
 
-  python scripts/static_mc.py --grid 4:1 --data data --results results --states th1 --seeds 0-9                  # one job: ~6 min per run, 1 thread
+  python scripts/static_mc.py --grid 4:1 --data data/sim --results results --states th1 --seeds 0-9                  # one job: ~6 min per run, 1 thread
   python scripts/static_mc.py --grid 4:1 --filter ukf --closure-iters 1 --states th2 --seeds 0-9 ...                 # full UKF: ~45 min per run
   python scripts/bias.py --grid 4:1 ...; python scripts/static_mc.py --aggregate --results results
   python scripts/static_mc.py --quick

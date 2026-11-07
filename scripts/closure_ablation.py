@@ -18,12 +18,12 @@ Four kinds of jobs:
                             voltage difference from warm), tables/ablation_text_numbers.csv (numbers quoted in Appendix E)
 
 Commands (a filter run is about 575 s CPU on the machine of the paper, 10620 steps; the 50 runs are 8 h CPU; jobs are independent):
-  python scripts/closure_ablation.py --grid 4:1 --data data --results results --closures warm --seeds 0-9
-  python scripts/closure_ablation.py --grid 4:1 --data data --results results --closures net0,net1,net1c,cold --seeds 0-4 [--core 3]
-  python scripts/closure_ablation.py --openloop --grid 4:1 --data data --results results                 (about 80 s)
-  python scripts/closure_ablation.py --cost --grid 4:1 --data data --results results            (about 4 min, idle machine)
+  python scripts/closure_ablation.py --grid 4:1 --data data/sim --results results --closures warm --seeds 0-9
+  python scripts/closure_ablation.py --grid 4:1 --data data/sim --results results --closures net0,net1,net1c,cold --seeds 0-4 [--core 3]
+  python scripts/closure_ablation.py --openloop --grid 4:1 --data data/sim --results results                 (about 80 s)
+  python scripts/closure_ablation.py --cost --grid 4:1 --data data/sim --results results            (about 4 min, idle machine)
   python scripts/closure_ablation.py --aggregate --results results
-  python scripts/closure_ablation.py --quick --grid 4:1 --data data --results results                    (needs the quick network of ``train_closure.py --quick``)
+  python scripts/closure_ablation.py --quick --grid 4:1 --data data/sim --results results                    (needs the quick network of ``train_closure.py --quick``)
 """
 import os
 import sys

@@ -10,10 +10,10 @@ Seeds. seed 0 and seed 1 differ ONLY in the measurement-noise sequence ``default
 (The two campaign scripts that produced the paper results differed only in their output names; the filter of seed 1 was run with the default closure, without the smoothed surface
 saturation that was tried and discarded in between.) Cost: about 13-14 h on one core per seed.
 
-  python scripts/ageing_track.py --grid 4:1 --data data --results results/ageing --seeds 0 --core 0     # job 1
-  python scripts/ageing_track.py --grid 4:1 --data data --results results/ageing --seeds 1 --core 1     # job 2 (in parallel)
-  python scripts/ageing_track.py --aggregate --grid 4:1 --data data --results results/ageing --seeds 0,1
-  python scripts/ageing_track.py --quick --data data --results results/quick                            # first 0.1 h, a minute or so
+  python scripts/ageing_track.py --grid 4:1 --data data/sim --results results/ageing --seeds 0 --core 0     # job 1
+  python scripts/ageing_track.py --grid 4:1 --data data/sim --results results/ageing --seeds 1 --core 1     # job 2 (in parallel)
+  python scripts/ageing_track.py --aggregate --grid 4:1 --data data/sim --results results/ageing --seeds 0,1
+  python scripts/ageing_track.py --quick --data data/sim --results results/quick                            # first 0.1 h, a minute or so
   options: --hours H (stop after H simulated hours), --resume (continue from the checkpoint written every 10 chunks), --no-guard (used by ablation_guard.py)
 
 Outputs (<results>): traj/ageing_track_seed<s>.npz (series every 10 s, innovation every step), ageing_track_seed<s>_rpt.csv, _cv.csv, _summary.csv, cpu_log.csv; with --aggregate:

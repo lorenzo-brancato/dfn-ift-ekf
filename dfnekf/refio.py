@@ -6,12 +6,12 @@ import os
 import numpy as np
 
 
-def path(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data", grid_ratio=None):
+def path(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data/sim", grid_ratio=None):
     ms = "-".join(str(m) for m in mesh) + (f"nu{grid_ratio:g}" if grid_ratio else "")
     return f"{data_dir}/ref_{proto}_{tag}_m{ms}" + ("" if period == 1.0 else f"_dt{period:g}") + ".npz"
 
 
-def load(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data", grid_ratio=None):
+def load(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data/sim", grid_ratio=None):
     d = np.load(path(proto, tag, mesh, period, data_dir, grid_ratio))
     t = d["t"]; n = int(round(t[-1] / period))
     tk = np.arange(n) * period
@@ -25,7 +25,7 @@ def load(proto, tag, mesh=(40, 20, 40), period=1.0, data_dir="data", grid_ratio=
     return out
 
 
-def load_uniform(proto, tag, mesh=(40, 20, 40), period=0.5, data_dir="data"):
+def load_uniform(proto, tag, mesh=(40, 20, 40), period=0.5, data_dir="data/sim"):
     """M2 block C: references whose time grid is shifted by a voltage-event termination (step ends at a non-grid instant). Resample on the uniform grid k*period:
     continuous variables by linear interpolation (duplicate times collapsed to the last sample), current = mean over [t_k, t_k+period] of the piecewise-constant current (sample value holds until the next sample)."""
     from scipy.interpolate import interp1d

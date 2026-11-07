@@ -10,10 +10,10 @@ Plating potential: the code evaluates phi_pl = phi_s - phi_e - Rf0 * R_f * j at 
 The SPMe baseline uses the electrode-average solid potential (see ``spme.py``).
 
 Run (one job per state/seed set; every job writes per-run files, so jobs can be split over processes):
-    python scripts/charge.py --grid 4:1 --data data --results results --states th2 --seeds 0-4 [--core 3]
-    python scripts/charge.py --quick --grid 4:1 --data data --results results          # smoke test: first state, seed 0, first 400 s
+    python scripts/charge.py --grid 4:1 --data data/sim --results results --states th2 --seeds 0-4 [--core 3]
+    python scripts/charge.py --quick --grid 4:1 --data data/sim --results results          # smoke test: first state, seed 0, first 400 s
 Aggregate (reads the per-run files of --results, writes <results>/tables and <results>/source_data):
-    python scripts/charge.py --aggregate --grid 4:1 --data data --results results
+    python scripts/charge.py --aggregate --grid 4:1 --data data/sim --results results
 Per-run outputs: <results>/traj/charge_<state>_s<seed>.npz (trajectories: t, I, V_ref, filter histories, spme_*), <results>/charge_<state>_s<seed>.csv (metrics per pulse x window
 x filter, threshold detection), <results>/charge_info_<state>_s<seed>.csv (certificate: guard rejections, Newton residuals, final parameters, CPU).
 Aggregate outputs: tables/tab_charge_m17.csv (Tables III and VI: one row per state x seed x charge pulse), tables/tab_cc_m17.csv (Table IV and Appendix D: thresholds on the 1C

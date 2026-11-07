@@ -109,7 +109,7 @@ def run(js, procs, results):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stage", default=None, help="stage name, comma-separated list, or 'all'"); ap.add_argument("--procs", type=int, default=6)
-    ap.add_argument("--data", default="data"); ap.add_argument("--results", default="results"); ap.add_argument("--list", action="store_true")
+    ap.add_argument("--data", default="data/sim"); ap.add_argument("--results", default="results"); ap.add_argument("--list", action="store_true")
     ap.add_argument("--closure-iters", "--ukf-iters", dest="ukf_iters", default="1", help="Newton iterations per sigma point of the full UKF (1 = as in the manuscript; 'conv' = to convergence)")
     a = ap.parse_args(); J = stages(a)
     if a.list or not a.stage:

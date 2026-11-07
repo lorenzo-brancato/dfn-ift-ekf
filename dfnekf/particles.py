@@ -15,25 +15,30 @@ F = 96485.33212
 
 
 def consts(R, D, dt, Nm, K=2):
-    """Step constants. Tail (n > Nm) in K geometric bands [Nm,2Nm),[2Nm,4Nm),...,[.., inf): one effective mode per band."""
-    lam = LAM[:Nm]
+    """Step constants. Tail (n > Nm) in K geometric bands [Nm,2Nm),[2Nm,4Nm),...,[.., inf): one effective mode per band.
+    D scalar: e, gain [Nm], rho, W [K]. D a vector over the nodes (a diffusivity frozen per node over the step, e.g. the
+    cathode D_s(y) law): e, gain [Nm, nodes], rho, W [K, nodes]. The eigenfunctions do not depend on D, so the modal
+    amplitudes carry over unchanged when D changes between steps; only the decay rates and gains change."""
+    vec = jnp.ndim(D) == 1
+    col = (lambda v: v[:, None]) if vec else (lambda v: v)
+    lam = col(LAM[:Nm])
     kap = D * lam ** 2 / R ** 2
     e = jnp.exp(-kap * dt)
     gain = (1 - e) * 2 / (R * kap)                       # a~ <- e a~ - gain * j/F
     edges = [Nm * 2 ** i for i in range(K)] + [NLAM]
     rho, W = [], []
-    Wtot = (2 * R / D) * (0.1 - jnp.sum(1 / lam ** 2))   # total DC gain of the tail (exact)
+    Wtot = (2 * R / D) * (0.1 - jnp.sum(1 / LAM[:Nm] ** 2))   # total DC gain of the tail (exact)
     Wexp = 0.0
     for i in range(K):
         lo, hi = edges[i], edges[i + 1]
-        lt = LAM[lo:hi]
+        lt = col(LAM[lo:hi])
         kt = D * lt ** 2 / R ** 2
         w = 2 / (R * kt)
-        Wi = jnp.sum(w)
+        Wi = jnp.sum(w, axis=0)
         if i == K - 1:                                   # open band: adds the remainder beyond NLAM
             Wi = Wtot - Wexp
         Wexp = Wexp + Wi
-        rho.append(jnp.sum(w * jnp.exp(-kt * dt)) / Wi)
+        rho.append(jnp.sum(w * jnp.exp(-kt * dt), axis=0) / Wi)
         W.append(Wi)
     return dict(e=e, gain=gain, rho=jnp.stack(rho), W=jnp.stack(W), kap=kap, dt=dt, R=R, K=K)
 
@@ -42,9 +47,10 @@ def step(state, j, C):
     """state = (c_avg [nodes], a [Nm,nodes], s [K,nodes]); j [A/m2] at the nodes (ZOH over dt)."""
     c_avg, a, s = state
     jF = j / F
+    col = lambda v: v if v.ndim == 2 else v[:, None]     # per-node constants (consts with a vector D) or shared
     c_avg = c_avg - 3.0 / C["R"] * jF * C["dt"]
-    a = C["e"][:, None] * a - C["gain"][:, None] * jF[None, :]
-    s = C["rho"][:, None] * s - ((1 - C["rho"]) * C["W"])[:, None] * jF[None, :]
+    a = col(C["e"]) * a - col(C["gain"]) * jF[None, :]
+    s = col(C["rho"]) * s - col((1 - C["rho"]) * C["W"]) * jF[None, :]
     return c_avg, a, s
 
 

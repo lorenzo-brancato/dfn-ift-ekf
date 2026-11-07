@@ -7,10 +7,10 @@ SPMe baseline from ``experiment.run_spme``). The reference eta and phi_pl are ev
 (``step.interface_ref``; the filter uses the same extrapolation in ``step.DFN.interface``).
 
 Run (one job per state/seed set):
-    python scripts/discharge.py --grid 4:1 --data data --results results --states th2 --seeds 0-4 [--core 3]
-    python scripts/discharge.py --quick --grid 4:1 --data data --results results       # smoke test: th2, seed 0, first 400 s (contains one 3C pulse)
+    python scripts/discharge.py --grid 4:1 --data data/sim --results results --states th2 --seeds 0-4 [--core 3]
+    python scripts/discharge.py --quick --grid 4:1 --data data/sim --results results       # smoke test: th2, seed 0, first 400 s (contains one 3C pulse)
 Aggregate (reads the per-run files of --results; writes <results>/tables and <results>/source_data):
-    python scripts/discharge.py --aggregate --grid 4:1 --data data --results results
+    python scripts/discharge.py --aggregate --grid 4:1 --data data/sim --results results
 Per-run outputs: <results>/traj/discharge_<protocol>_<state>_s<seed>.npz (all filter histories, spme_*), <results>/discharge_<protocol>_<state>_s<seed>.csv (errors per window and filter),
 <results>/discharge_info_<protocol>_<state>_s<seed>.csv (window times, guard certificate, final parameter errors, minimum reference phi_pl in the 3C window, CPU).
 Aggregate outputs: tables/tab_baselines_m17.csv (Table VII), tables/discharge_runs.csv, tables/discharge_summary.csv, tables/discharge_text_numbers.csv (phi_pl RMS ranges, margins,

@@ -4,9 +4,9 @@ The manuscript's full UKF performs ONE Newton iteration of the closure per sigma
 inconsistent runs of the 20 and one consistent run) with FOUR iterations, which brings the closure residual at the sigma points to machine precision in the median, and compares the
 time-averaged NEES (R_f, D_s) and the parameter errors run by run with the one-iteration runs. It is a result of its own: the 30-run UKF set of the paper is NOT repeated at k = 4.
 
-  python scripts/ukf_pilot.py --grid 4:1 --data data --results results/ukf_pilot_k4 --seeds 0,3,14,5     # runs the four filters, one process each is advised; about 8.7 h CPU per run
+  python scripts/ukf_pilot.py --grid 4:1 --data data/sim --results results/ukf_pilot_k4 --seeds 0,3,14,5     # runs the four filters, one process each is advised; about 8.7 h CPU per run
   python scripts/ukf_pilot.py --aggregate --results results/ukf_pilot_k4 --k1 results/4to1                 # table of NEES k=1 vs k=4 (the k=1 runs come from twin_nees.py --filter ukf --closure-iters 1)
-  python scripts/ukf_pilot.py --quick --grid 4:1 --data data --results results/quick                       # 600 s of the protocol, k = 4
+  python scripts/ukf_pilot.py --quick --grid 4:1 --data data/sim --results results/quick                       # 600 s of the protocol, k = 4
 
 Outputs: twin_ukf4_th2_s<seed>.csv (per run, as twin_nees.py; resSigma_* = residual of the closure over all sigma points, maximum / median / p99 over the steps),
 tables/tab_ukf_pilot.csv (aggregation), traj/*.npz (not committed).

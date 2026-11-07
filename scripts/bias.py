@@ -6,7 +6,7 @@ ageing state: the floor below which no filter can go on that reference. ``static
 
 Output: <results>/bias_<state>.csv (one row), columns bias_Rf_pct, bias_LAM_pct, bias_Ds_pct (signed, % of the parameter range, fit minus true) and the fit itself.
 
-  python scripts/bias.py --grid 4:1 --data data --results results --states th1,th2,th3,th4,th5      # ~85 s per state, one thread
+  python scripts/bias.py --grid 4:1 --data data/sim --results results --states th1,th2,th3,th4,th5      # ~85 s per state, one thread
   python scripts/bias.py --quick
 """
 import sys

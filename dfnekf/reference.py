@@ -3,7 +3,7 @@ ageing state theta = (Rf, LAM, LLI, Ds): Rf = R_f / R_f0 (SEI resistivity x Rf),
 (fraction of the anode stoichiometric window, c_n0 -= LLI * dx_n * cmax_n), Ds = D_s,n / D_s,n0. Constant electrolyte transport as in the grey-box model, unless ``var_transport``.
 Model options: SEI 'constant' with a distributed film resistance and the interfacial current as a state, so that eta = dphi - U - j R_f.
 
-Command line (needs pybamm, which is imported lazily only here):  python -m dfnekf.reference <jobs.json> --workers 4 --data data
+Command line (needs pybamm, which is imported lazily only here):  python -m dfnekf.reference <jobs.json> --workers 4 --data data/sim
 A job is a dict {proto, tag, theta, mesh, period[, soc, var_transport, grid_ratio, force]}; ``standard_jobs()`` lists every reference the paper needs.
 """
 import argparse
@@ -129,7 +129,7 @@ def run(proto, theta=(1.0, 0.0, 0.0, 1.0), mesh=(40, 20, 40), period=1.0, soc=No
     return out
 
 
-def fname(proto, tag, mesh, period=1.0, grid_ratio=None, data_dir="data"):
+def fname(proto, tag, mesh, period=1.0, grid_ratio=None, data_dir="data/sim"):
     ms = "-".join(str(m) for m in mesh) + (f"nu{grid_ratio:g}" if grid_ratio else "")
     return f"{data_dir}/ref_{proto}_{tag}_m{ms}" + ("" if period == 1.0 else f"_dt{period:g}") + ".npz"
 
@@ -145,7 +145,7 @@ def go(j):
     """Run one job (module-level so that it can be pickled by the process pool); skip if the file exists unless ``force``."""
     try:
         proto, tag, theta, mesh, period = j["proto"], j["tag"], tuple(j["theta"]), tuple(j["mesh"]), j.get("period", 1.0)
-        gr = j.get("grid_ratio"); fn = fname(proto, tag, mesh, period, gr, j.get("data_dir", "data"))
+        gr = j.get("grid_ratio"); fn = fname(proto, tag, mesh, period, gr, j.get("data_dir", "data/sim"))
         if os.path.exists(fn) and not j.get("force"): return ("skip", fn)
         kw = dict(theta=theta, mesh=mesh, period=period, soc=j.get("soc"), var_transport=bool(j.get("var_transport", False)), grid_ratio=gr)
         if proto == "D1": kw["I_custom"] = d1_current(); kw["soc"] = 0.8
@@ -160,7 +160,7 @@ def go(j):
 def main():
     ap = argparse.ArgumentParser(description="generate PyBaMM reference simulations")
     ap.add_argument("jobs", help="JSON file with a list of jobs, or 'standard' for the references of the paper")
-    ap.add_argument("--workers", type=int, default=4); ap.add_argument("--data", default="data")
+    ap.add_argument("--workers", type=int, default=4); ap.add_argument("--data", default="data/sim")
     a = ap.parse_args()
     jobs = standard_jobs() if a.jobs == "standard" else json.load(open(a.jobs))
     for j in jobs: j["data_dir"] = a.data

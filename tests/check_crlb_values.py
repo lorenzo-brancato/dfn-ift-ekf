@@ -5,7 +5,7 @@
 2. Recomputation (JAX, ~20 s per state): sensitivities of the grey-box model on the P6Lx2 reference initial state -> conditional bound and 4-parameter marginal, compared
    with mc_budget.csv (crlb) and tab_crlb_m17.csv (sd_pct_range and correlations of the 4-parameter version).
    Uses the per-run files of `scripts/crlb.py` in --results if present (--from-files), otherwise recomputes the states in --states.
-Usage: python tests/check_crlb_values.py [--states th1,th2] [--data data] [--grid 4:1] [--no-recompute] [--results DIR --from-files]
+Usage: python tests/check_crlb_values.py [--states th1,th2] [--data data/sim] [--grid 4:1] [--no-recompute] [--results DIR --from-files]
 Exit status 1 if a check fails.
 """
 import os, sys, argparse
@@ -15,7 +15,7 @@ from dfnekf import crlb
 
 p = argparse.ArgumentParser()
 p.add_argument("--mc-budget", default=os.path.join(HERE, "data", "mc_budget.csv")); p.add_argument("--tab-crlb", default=os.path.join(HERE, "data", "tab_crlb_m17.csv"))
-p.add_argument("--states", default="th1,th2,th3,th4,th5"); p.add_argument("--data", default="data"); p.add_argument("--grid", default="4:1")
+p.add_argument("--states", default="th1,th2,th3,th4,th5"); p.add_argument("--data", default="data/sim"); p.add_argument("--grid", default="4:1")
 p.add_argument("--no-recompute", action="store_true"); p.add_argument("--results", default=None); p.add_argument("--from-files", action="store_true"); p.add_argument("--core", type=int, default=None)
 a = p.parse_args()
 mc = pd.read_csv(a.mc_budget); tab = pd.read_csv(a.tab_crlb, comment="#"); fails = []

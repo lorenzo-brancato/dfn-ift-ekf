@@ -17,8 +17,8 @@ Outputs in <results>: model_checks_gateA_states.csv, model_checks_gateA.csv, mod
 --aggregate writes <results>/tables/tab_model_checks.csv (one row per number quoted in Appendix A).
 
 Commands (algebra about 3 min, corners 1 min, vt 5 min, lithium 6 min for 5 states, statements 3 min + PyBaMM 3 min):
-  python scripts/model_checks.py --grid 4:1 --parts algebra,vt,lithium,statements --data data --results results
-  python scripts/model_checks.py --grid 4:1 --parts statements --with-pybamm --data data --results results
+  python scripts/model_checks.py --grid 4:1 --parts algebra,vt,lithium,statements --data data/sim --results results
+  python scripts/model_checks.py --grid 4:1 --parts statements --with-pybamm --data data/sim --results results
   python scripts/model_checks.py --aggregate --results results
   python scripts/model_checks.py --quick --results /tmp/checks_quick
 """

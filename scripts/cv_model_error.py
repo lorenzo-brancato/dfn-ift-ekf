@@ -11,9 +11,9 @@ Numbers produced (``tables/tab_cv_model_error.csv``, aggregate mode):
   * mean innovation (measured - predicted voltage) of the tracker in the CV of RPT 3-6 (text: 0.15 mV), read from ``<tracking>/tables/tab_aging_cv.csv``. NB: this window
     (RPT 3-6) differs from the one of the 0.7 mV (RPT 3-10); the table also gives the model error of z1 in RPT 3-6 and the tracker innovation in RPT 3-10.
 
-  python scripts/cv_model_error.py --variants z1,z2 --grid 4:1 --data data --results results/cv_model_error      # about 0.2 h per variant, one job each
+  python scripts/cv_model_error.py --variants z1,z2 --grid 4:1 --data data/sim --results results/cv_model_error      # about 0.2 h per variant, one job each
   python scripts/cv_model_error.py --aggregate --results results/cv_model_error --tracking results/ageing
-  python scripts/cv_model_error.py --quick --data data --results results/quick                               # first 1000 s of the run, both variants
+  python scripts/cv_model_error.py --quick --data data/sim --results results/quick                               # first 1000 s of the run, both variants
 
 Outputs: cv_model_error_<variant>_phase.csv (columns as the campaign tables: variant, block, phase, n, err_mean_mV, err_rms_mV, csn_max_over_cmax, n_trunc, excess_max_mol_m3),
 cv_model_error_<variant>_summary.csv, traj/cv_model_error_<variant>.npz; aggregate: source_data/fig_tracking_z.csv (Fig. 8f), tables/tab_cv_model_error.csv.

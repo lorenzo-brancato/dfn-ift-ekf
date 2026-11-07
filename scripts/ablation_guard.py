@@ -9,9 +9,9 @@ Two separate claims:
      that the guard did NOT trigger on the protocols of the static tests: this is a different claim, taken from the per-run CSVs of the static-test scripts (column n_rejected_total);
      pass their folder with --static to have it summed here.
 
-  python scripts/ablation_guard.py --grid 4:1 --data data --results results/ablation_guard --seeds 0 --core 0     # the unguarded run stops at ~6.4 h of simulated time: about 20-30 min
+  python scripts/ablation_guard.py --grid 4:1 --data data/sim --results results/ablation_guard --seeds 0 --core 0     # the unguarded run stops at ~6.4 h of simulated time: about 20-30 min
   python scripts/ablation_guard.py --aggregate --results results/ablation_guard --tracking results/ageing --static results
-  python scripts/ablation_guard.py --quick --data data --results results/quick                                    # 0.05 h, no breakdown expected
+  python scripts/ablation_guard.py --quick --data data/sim --results results/quick                                    # 0.05 h, no breakdown expected
 
 Outputs: ablation_guard_breakdown.csv (one row per seed x guard: breakdown time, first time of every condition, hours simulated), ablation_guard_rejections.csv (claim 2),
 traj/ablation_guard_seed<s>_{guard,noguard}.npz.

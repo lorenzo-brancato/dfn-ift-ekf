@@ -17,8 +17,8 @@ Outputs (``<results>`` = --results; with --quick everything goes to ``<results>/
   traj/closure_training_set.npz the labelled set (only with --save-set; about 135 MB, not committed)
 
 Commands (about 10 min wall on the machine of the paper: 628 s wall, 1181 s CPU; plus a few minutes for the labels):
-  python scripts/train_closure.py --grid 4:1 --data data --results results
-  python scripts/train_closure.py --quick --grid 4:1 --data data --results results       # smoke test: 4 references, 2500 samples, 200 iterations
+  python scripts/train_closure.py --grid 4:1 --data data/sim --results results
+  python scripts/train_closure.py --quick --grid 4:1 --data data/sim --results results       # smoke test: 4 references, 2500 samples, 200 iterations
 Paper numbers: validation median 1.5 % and 99th percentile 13.5 % (first version of the network; the retrained network on the list below gives the numbers of this log).
 """
 import os
