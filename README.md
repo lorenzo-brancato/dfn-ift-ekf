@@ -60,6 +60,8 @@ Times are wall-clock seconds (or hours) of one job on the machine below, one thr
 | Learned closure, Fig. 11, Tab. VIII | `train_closure.py`, `closure_ablation.py`, `residual_stress.py` (`closure_train`, `closure`) | 15 | 16 min (training), 4–38 min (runs), 1 min (stress) | 8.6 h |
 | Ageing tracking, Fig. 8, Sec. III-D | `ageing_track.py` (`ageing`) | 2 | 15.7 h each, in parallel | 57.2 h |
 | CV model error, Fig. 8f | `cv_model_error.py` (`aggregate`) | 2 | under 1 min | ≈ 0 |
+| SPMe open loop, App. D; SEI current, Sec. III-D (review) | `review_checks.py --parts spme,sei` | 1 | sei ≈ 30 min; spme not timed separately | ≈ 0.6 h |
+| CV freeze by protocol phase, Sec. III-D (review): control, P1, P2 | `ageing_track.py --freeze phase [--cv-update none]` (control: no flag), then `freeze_cv.py` | 5 | 20.7 h (control), 21.4–21.7 h (P1), 21.6–21.8 h (P2), five at once | 107 h |
 | Ablation: state guard (120 h) | `ablation_guard.py --guarded-from results/4to1` | 1 | 5.1 h | ≈ 7 h |
 | Ablation: slow RPT | `ablation_slow_rpt.py` | 1 | 10.8 h | 20.2 h |
 | Costs, Fig. 4, Tab. I, V, VIII | `cost.py` (two grids), `jacobian_check.py --parts cost,step`, `closure_ablation.py --cost` (`timing`) | 4 | 13 min, 13 min, 2.5 min, 4 min | 1.5 h |
@@ -75,6 +77,12 @@ Two scripts support the pilot of Appendix B (why the full UKF solves the closure
 - `scripts/ukf_closure_check.py`: residual of the closure at the 2N+1 sigma points of the UKF run with one iteration, and the residual and cost of 1 to 6 iterations and of Newton to convergence at the same points.
 - `scripts/ukf_pilot.py` (stage `ukf_pilot`): four UKF runs at th2 with four iterations per sigma point against the one-iteration runs; it is a result of its own (see `release/VERIFY_M18.md`).
 
+### Added after the external review (not stages of `run_all.py`)
+
+- `scripts/review_checks.py` (`--parts spme,sei`; `--parts freeze` reads a run of `ageing_track.py`): Appendix D, the SPMe in open loop with the true parameters on the charge protocol (phi_pl error and 0 mV crossings without any estimation, parameter errors of both filters at the end of the P6L blocks); Sec. III-D, the lithium-consuming SEI side-reaction current added to the open-loop model removes 13 % of the model error in the CV hold of RPT 3-6. `--quick` runs a short version of each part.
+- `scripts/ageing_track.py --freeze {none,voltage,phase}` (default `none`, the paper's run, bit for bit): the CV freeze of Sec. III-D. `voltage` zeroes the parameter rows of the Kalman gain where the *measured* voltage is at least `--freeze-above` (4.195 V) in charge, the first remedy tried; `phase` does so during the constant-voltage segment of every RPT, taken from the protocol schedule as a BMS knows its charger state; `--cv-update none` removes the measurement update in that segment altogether (prediction only). `--cv-scope all` extends `phase` to the CV of the ageing cycles. Outputs carry the suffixes `_freeze-voltage`, `_freeze-phase`, `_freeze-phase-noupdate`.
+- `scripts/freeze_cv.py`: evaluates those runs (criteria at the read-outs before the CV, at its end and at the end of the RPT, hour up to which all estimates pass, change of the estimates during and after the CV) and writes `trk_rf_<variant>.csv` in the format of `paper/figures/data/trk_rf.csv`. Results and discussion: `release/FREEZE_CV.md`.
+
 ### Timing the filter
 
 Run `--stage timing` with no other process on the machine (the scripts write the number of busy processes in the header). **Do not pin the process to a core** (`taskset`, `SetProcessAffinityMask`, `dfnekf.runtime.pin_to_core`) when timing: XLA's helper threads share the pinned core and the step at N = 653 doubles (15.6 ms against 7.0 ms). `pin_to_core` is kept for long accuracy runs only.
@@ -88,8 +96,8 @@ Reference machine of the runs reported here: Intel Core i7-9700 (8 cores, 3.0 GH
 | `dfnekf/` | the package: `params`, `grid`, `particles`, `electrolyte`, `closure`, `step`, `structjac`, `ekf`, `ukf`, `spme`, `sens`, `crlb`, `closure_net`, `protocols`, `ageing`, `reference`, `metrics`, `experiment`, `montecarlo`, `runtime`, `timing` |
 | `scripts/` | one script per paper item (docstring: paper item, grid, command, expected time) and `run_all.py` |
 | `figdata/make_figdata.py` | turns the results into `paper/figures/data/*.csv` and compares them with a reference folder |
-| `paper/` | `main.tex`, the figures (pgfplots) and their data; build with `pdflatex main.tex` twice |
-| `tests/` | Jacobian (IFT against `jacfwd`), lithium conservation, grid geometry, stored values |
+| `paper/` | `main.tex`, the figures (pgfplots) and their data; build with `pdflatex main.tex` three times (the third pass resolves the references that the pgfplots figures delay) |
+| `tests/` | Jacobian (IFT against `jacfwd`), lithium conservation, grid geometry, stored values, shipped closure weights, CV-freeze codes |
 
 ## Citation
 

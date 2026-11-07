@@ -31,15 +31,21 @@ FLOORS = dict(Rf=3.90, LAM=3.10, Ds=5.37, LLI_inv=3.00)      # criterion A: erro
 POINTS = ("p6l", "disc", "precv", "end")                      # read-out points of every RPT (step_end_t index 12, 14, 16, last)
 RES_LIM = 1e-2                        # closure residual limit of the guard / of the breakdown detector
 SER = ("vals", "sd_vals", "li", "eta", "ce_min", "corr_ut")  # stored every 20 steps
-PS = ("innov", "K_th", "csn_max", "rejected")                # stored at every step
+PS = ("innov", "K_th", "csn_max", "rejected")                # stored at every step ("frozen" is added when a freeze is active)
+FREEZE_MODES = ("none", "voltage", "phase")                  # see ``Tracker``
 VIOL = ("viol_ce", "viol_cs", "viol_F", "viol_nf")           # guard conditions: electrolyte depletion, surface concentration out of range, closure residual, non-finite
 
 
 class Tracker:
     """Filter + reference data. ``P`` is the dict of ``ageing.load``; ``guard`` switches the state guard; ``seed`` seeds the measurement noise."""
 
-    def __init__(self, P, grid, seed=0, guard=True, nsteps=None):
-        self.P, self.guard, self.seed, self.grid = P, guard, seed, grid
+    def __init__(self, P, grid, seed=0, guard=True, nsteps=None, freeze="none", freeze_above=4.195, cv_update="state", R0=None, cv_scope="rpt"):
+        """CV freeze (default ``"none"``: the filter of the paper, bit for bit). ``freeze="voltage"``: the update is restricted at the steps where the MEASURED voltage is >= ``freeze_above`` and the
+        current is a charge (rule of the first remedy tried, campaign M9). ``freeze="phase"``: restricted during the constant-voltage segment of the protocol (step 17 of every RPT; with
+        ``cv_scope="all"`` also the CV of the ageing cycles, step 3), known to a BMS from its charger state, never from the measurement; needs ``R0`` (the reference file, for the step schedule).
+        ``cv_update="state"``: the parameter rows of the gain are zero, the cell state is still updated and the parameter variances are not reduced; ``"none"``: no measurement update (prediction only)."""
+        assert freeze in FREEZE_MODES and cv_update in ("state", "none") and cv_scope in ("rpt", "all")
+        self.P, self.guard, self.seed, self.grid, self.freeze = P, guard, seed, grid, freeze
         self.I, self.t = np.asarray(P["I"]), np.asarray(P["t"])
         N = len(self.t); self.y = P["V"] + SIGMA_V * np.random.default_rng(seed).normal(size=N)
         self.N = N if nsteps is None else min(int(nsteps), N)
@@ -50,8 +56,18 @@ class Tracker:
         rng_th = np.array([RANGE[c][1] - RANGE[c][0] for c in COORDS])
         self.P0d = np.concatenate([np.full(m.Nn, 0.03 * P0["cmax_n"]), np.full(m.Np, 0.03 * P0["cmax_p"]), np.full(m.Nm * nel, 1.0), np.full(m.K * nel, 1.0), np.full(m.N, 3.0), 0.3 * rng_th / dc])
         self.Qd = np.concatenate([np.zeros(m.Nn + m.Np), np.zeros(m.Nm * nel), np.zeros(m.K * nel), np.zeros(m.N), 1e-4 * rng_th * np.sqrt(DT) / dc])
-        step0, self.scale = ek.make_step_g(self.x0, self.P0d, self.Qd, SIGMA_V ** 2, guard=guard)
-        self._chunk = jax.jit(lambda carry, Ic, yc, In: jax.lax.scan(step0, carry, (Ic, yc, In)))
+        step0, self.scale = ek.make_step_g(self.x0, self.P0d, self.Qd, SIGMA_V ** 2, guard=guard, freeze=freeze != "none")
+        if freeze == "none":
+            self.fcode = None
+            self._chunk = jax.jit(lambda carry, Ic, yc, In: jax.lax.scan(step0, carry, (Ic, yc, In)))
+        else:
+            if freeze == "voltage": mask = (self.y >= freeze_above) & (self.I < 0)
+            else:
+                assert R0 is not None, "freeze='phase' needs the reference file (R0) for the step schedule"
+                cyc, sti = step_map(P, R0); rpt_c = np.asarray(R0["is_rpt"], bool)[cyc]
+                mask = (rpt_c & (sti == 17)) | ((~rpt_c) & (sti == 3) & (cv_scope == "all"))
+            self.fcode = np.where(mask, 1 if cv_update == "state" else 2, 0).astype(np.int32)
+            self._chunk = jax.jit(lambda carry, Ic, yc, In, Fc: jax.lax.scan(step0, carry, (Ic, yc, In, Fc)))
         x0 = jnp.asarray(self.x0); g0 = ek.init_g(ek.zeff(x0), jnp.asarray(self.I[0]), ek.th_of(x0[m.nz:]))
         self.carry0 = (jnp.zeros(ek.n), jnp.diag((jnp.asarray(self.P0d) / self.scale) ** 2), g0)
 
@@ -66,7 +82,8 @@ def track(tr, ckpt=None, resume=False, skip=None, stop_on_breakdown=False, chunk
     assert chunk % 20 == 0, "the chunk must be a multiple of 20 (the series are stored every 20th step)"
     I, y, N, t = tr.I, tr.y.copy(), tr.N, tr.t
     if skip is not None: y[:N][np.asarray(skip[:N], bool)] = np.nan
-    S = dict(out={k: [] for k in SER}, ps={k: [] for k in PS}, innov_rms=[], resF=[], nrej=[], nviol=[], nkind={k: [] for k in VIOL}, nonfinite=[], first={}, next_ci=0)
+    PSk = PS + (("frozen",) if tr.fcode is not None else ())
+    S = dict(out={k: [] for k in SER}, ps={k: [] for k in PSk}, innov_rms=[], resF=[], nrej=[], nviol=[], nkind={k: [] for k in VIOL}, nonfinite=[], first={}, next_ci=0)
     carry = tr.carry0; breakdown = -1; wall0 = time.time(); cpu0 = time.process_time()
     if resume and ckpt and os.path.exists(ckpt):
         st = pickle.load(open(ckpt, "rb")); carry = tuple(jnp.asarray(a) for a in st["carry"]); S = st["S"]; breakdown = st["breakdown"]; wall0 -= st.get("wall", 0.0); log(f"resumed at chunk {S['next_ci'] // chunk}")
@@ -79,10 +96,13 @@ def track(tr, ckpt=None, resume=False, skip=None, stop_on_breakdown=False, chunk
         pad = chunk - n_ok
         if pad:
             Ic = np.concatenate([Ic, np.zeros(pad)]); yc = np.concatenate([yc, np.full(pad, yc[-1])]); In = np.concatenate([In, np.zeros(pad)])
-        carry, H = tr._chunk(carry, jnp.asarray(Ic), jnp.asarray(yc), jnp.asarray(In)); H = jax.tree_util.tree_map(np.asarray, H)
+        if tr.fcode is None: carry, H = tr._chunk(carry, jnp.asarray(Ic), jnp.asarray(yc), jnp.asarray(In))
+        else:
+            Fc = np.concatenate([tr.fcode[sl][:n_ok], np.zeros(pad, np.int32)]); carry, H = tr._chunk(carry, jnp.asarray(Ic), jnp.asarray(yc), jnp.asarray(In), jnp.asarray(Fc))
+        H = jax.tree_util.tree_map(np.asarray, H)
         meas = np.ones(n_ok, bool) if skip is None else ~np.asarray(skip[ci:ci + n_ok], bool)             # samples with a real measurement update
         for k in SER: S["out"][k].append(H[k][::20])
-        for k in PS: S["ps"][k].append(np.asarray(H[k][:n_ok], dtype=np.float32 if k != "rejected" else np.int8))
+        for k in PSk: S["ps"][k].append(np.asarray(H[k][:n_ok], dtype=np.float32 if k not in ("rejected", "frozen") else np.int8))
         S["innov_rms"].append(float(np.sqrt(np.mean(H["innov"][:n_ok][meas] ** 2))) if meas.any() else float("nan")); S["resF"].append(float(np.max(H["resF"][:n_ok])))
         rej = H["rejected"][:n_ok] & meas; S["nrej"].append(int(rej.sum()))
         vk = {k: H[k][:n_ok] & meas for k in VIOL}
@@ -141,13 +161,13 @@ def true_value(P, name, k):
 # ----------------------------------------------------------------------------------------------------------------- evaluation
 def evaluate_rpt(d, P, R0, m, label, variant="final", points=POINTS):
     """One row per RPT x read-out point: truth, estimate, error (% of range), sd, z, distance from the logit edge, inventory error, criteria A, B, z.
-    Read-out points: end of P6L ('p6l'), end of the slow discharge ('disc'), last sample of the slow charge before the CV ('precv'), end of the RPT ('end').
+    Read-out points: end of P6L ('p6l'), end of the slow discharge ('disc'), last sample of the slow charge before the CV ('precv'), end of the CV hold ('cvend', optional), end of the RPT ('end').
     Only points reached by the run (d['n_steps']) are evaluated."""
     vals, sd, li, cu = d["vals"], d["sd_vals"], d["li"], d["corr_ut"]; coords = list(d["coords"]); chunk = int(d["chunk"]) if "chunk" in d else CHUNK; n_done = int(d["n_steps"]) if "n_steps" in d else len(P["t"])
     pair = {f"{coords[a]}_{coords[b]}": k for k, (a, b) in enumerate(zip(*np.triu_indices(len(coords), 1)))}
     Linv = inventory_loss(m, P, li); se = R0["step_end_t"]; rpt_c = np.where(R0["is_rpt"])[0]; last = len(P["Rf"]) - 1; rows = []
     for kr, c in enumerate(rpt_c):
-        pts = {"p6l": se[c][12], "disc": se[c][14], "precv": se[c][16], "end": np.nanmax(se[c])}
+        pts = {"p6l": se[c][12], "disc": se[c][14], "precv": se[c][16], "cvend": se[c][17], "end": np.nanmax(se[c])}
         for lab in points:
             tr_ = pts[lab] if lab in pts else se[c][int(lab)]
             ks = min(int(round(tr_ / DT)), last)

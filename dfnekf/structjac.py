@@ -6,7 +6,7 @@ Structure in the code (step.py DFN.advance + particles.step + elec_mats):
   c_e+    = E c_e + G j_el                               -> fixed block E (depends on a_s only), G from the augmented expm
   j = j(c_surf(z), c_e, I, theta) from F(y; z, theta) = 0,  c_surf = c_avg + sum_m a_m + sum_k s_k  (y = [j, phi_e, phi_s]).
 Hence A = dPhi/dz = Lambda + B C, C = dj/dz = (dj/dw)(dw/dz), w = (c_surf,n; c_surf,p; c_e); ZOH: j constant over the step (no dj/dt term).
-Implicit function theorem: dy/dw = -J_F^-1 dF/dw. Reverse mode: pullback (J_F^T X = E_sel) with n_j + 1 = 21 outputs (j and V) against 45 inputs."""
+Implicit function theorem: dy/dw = -J_F^-1 dF/dw. Adjoint (transposed) solves J_F^T X = E_sel with n_j + 1 = 41 right-hand sides (j and V) against 90 inputs (c_surf,n, c_surf,p, c_e) on the 20/10/20 grid."""
 import numpy as np
 import jax, jax.numpy as jnp
 import jax.scipy.linalg as jsl

@@ -183,7 +183,9 @@ class GuardedEKF(EKF):
         """Lithium-effective state used by the closure (identity here; EKF4L shifts the anode averages by LLI)."""
         return x[:self.nz]
 
-    def make_step_g(self, x0, P0_diag, Q_diag, R, guard=False, scale=None, ce_lim=10.0, res_lim=1e-2):
+    def make_step_g(self, x0, P0_diag, Q_diag, R, guard=False, scale=None, ce_lim=10.0, res_lim=1e-2, freeze=False):
+        """``freeze``: the scan input has a 4th element, an integer code per step: 0 = normal update; 1 = parameter rows of the gain set to zero (the cell state is still
+        updated, the parameter variances are not reduced); 2 = no measurement update at all (prediction only, K = 0). The Joseph form stays valid for any gain."""
         nz, n, nth, S, m = self.nz, self.n, self.nth, self.S, self.m
         A_ = m.A; nj = m.nel; ie = S.ie
         if scale is None:
@@ -226,6 +228,8 @@ class GuardedEKF(EKF):
             f_u = (L["f"] - x0) / scale
             Us = U / scale[:, None]; Vts = Vt * scale[None, :]; hs = h * scale
             Ph = P @ hs; Sy = hs @ Ph + Rk; K = Ph / Sy
+            if freeze:
+                fcode = inp[3]; K = jnp.where(fcode == 1, K.at[nz:].set(0.0), K); K = jnp.where(fcode == 2, jnp.zeros_like(K), K)
             innov = yk - L["V"]; du = K * innov
             M_ = P - jnp.outer(K, Ph)
             Pp = M_ - jnp.outer(M_ @ hs, K) + Rk * jnp.outer(K, K)
@@ -273,6 +277,7 @@ class GuardedEKF(EKF):
                        F_warm=res0, F_newton=L["res"], newton_it=kw, newton_fb=(rw > 1e-10) | (kw >= 60), K_norm=jnp.linalg.norm(K), K_th=jnp.linalg.norm(K[nz:]), du_norm=jnp.linalg.norm(du), du_th=jnp.linalg.norm(du[nz:]),
                        F_corr=res_up, F_next=rN, it_next=kN, ce_raw_min_up=ce_raw_u, csn_min_up=jnp.min(csn_u), csn_max_up=jnp.max(csn_u), csp_min_up=jnp.min(csp_u), csp_max_up=jnp.max(csp_u),
                        corr_ut=corr_ut, K_c=K[nz:], dvdc=self.dval_dc(c_up), viol_ce=v_ce, viol_cs=v_cs, viol_F=v_F, viol_nf=v_nf, rejected=reject, Sy=jnp.sqrt(Sy))
+            if freeze: out["frozen"] = fcode
             return (u_next, Pn, L["g"]), out
 
         return step, scale

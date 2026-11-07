@@ -15,6 +15,11 @@ saturation that was tried and discarded in between.) Cost: about 13-14 h on one 
   python scripts/ageing_track.py --aggregate --grid 4:1 --data data --results results/ageing --seeds 0,1
   python scripts/ageing_track.py --quick --data data --results results/quick                            # first 0.1 h, a minute or so
   options: --hours H (stop after H simulated hours), --resume (continue from the checkpoint written every 10 chunks), --no-guard (used by ablation_guard.py)
+  CV freeze (default: none = the paper's run). --freeze voltage [--freeze-above 4.195]: parameter rows of the gain zeroed where the MEASURED voltage >= 4.195 V and the current is a charge
+  (the first remedy of Sec. III-D, "freezing the parameter updates during the CV phase"); --freeze phase: the same during the constant-voltage segment of every RPT (known from the protocol
+  schedule, as a BMS knows its charger state; --cv-scope all adds the CV of the ageing cycles); with --cv-update none no measurement update at all in that segment (prediction only for state
+  and covariance), default --cv-update state (cell state updated, parameter rows of the gain zero). Outputs carry a suffix: _freeze-voltage, _freeze-phase, _freeze-phase-noupdate.
+  python scripts/ageing_track.py --freeze phase --quick --data data --results results/quick      # mechanism check: the freeze code is applied to samples 200-299 of the first 0.1 h
 
 Outputs (<results>): traj/ageing_track_seed<s>.npz (series every 10 s, innovation every step), ageing_track_seed<s>_rpt.csv, _cv.csv, _summary.csv, cpu_log.csv; with --aggregate:
 tables/tab_aging_tracking.csv (one row per seed x RPT x point), tables/tab_aging_cv.csv (diagnostics of every CV hold), tables/tab_aging_summary.csv (gates and headline numbers),
@@ -34,21 +39,30 @@ def run_one(a, seed, P, R0):
     from dfnekf import ageing_tracker as at
     n = int(a.hours * 3600 / at.DT) + 1 if a.hours else (720 if a.quick else None)
     chunk = a.chunk or (360 if a.quick else at.CHUNK)
-    tr = at.Tracker(P, a.grid, seed=seed, guard=not a.no_guard, nsteps=n)
-    name = f"ageing_track_seed{seed}" + ("_noguard" if a.no_guard else "")
+    tr = at.Tracker(P, a.grid, seed=seed, guard=not a.no_guard, nsteps=n, freeze=a.freeze, freeze_above=a.freeze_above, cv_update=a.cv_update, R0=R0, cv_scope=a.cv_scope)
+    if a.quick and tr.fcode is not None:                       # mechanism test: the freeze code on a window of the pulses (the first CV hold is at 6 h)
+        code = 1 if a.cv_update == "state" else 2; tr.fcode[:] = 0; tr.fcode[200:300] = code
+    name = f"ageing_track_seed{seed}" + ("_noguard" if a.no_guard else "") + suffix(a)
     clock = cli.Clock(a, name)
     traj = os.path.join(a.results, "traj", name + ".npz"); ck = os.path.join(a.results, "traj", name + "_ckpt.pkl"); os.makedirs(os.path.dirname(traj), exist_ok=True)
     d = at.track(tr, ckpt=ck, resume=a.resume, stop_on_breakdown=False, chunk=chunk)
     at.save_run(traj, d)
+    if a.quick and tr.fcode is not None:
+        w = d["vals"][11:15]; print(f"freeze mechanism check (code {int(tr.fcode.max())} on samples 200-299): parameters constant over the window: {bool(np.allclose(w, w[0], rtol=0, atol=1e-12))}; frozen steps stored: {int((d['ps_frozen'] > 0).sum())}", flush=True)
     write_run_tables(a, name, f"seed{seed}", d, tr.m, P, R0)
     clock.log(f"seed {seed}, {tr.N} steps")
     if os.path.exists(ck) and not a.quick: os.remove(ck)
     print(f"seed {seed}: {tr.N} steps, rejected updates {int(d['n_rejected'].sum())}, wall {float(d['wall']):.0f} s -> {traj}", flush=True)
 
 
+def suffix(a):
+    """File-name suffix of a freeze variant ('' for the paper's run)."""
+    return "" if a.freeze == "none" else f"_freeze-{a.freeze}" + ("-noupdate" if a.cv_update == "none" else "") + ("-allcv" if a.cv_scope == "all" else "")
+
+
 def write_run_tables(a, name, label, d, m, P, R0):
     from dfnekf import ageing_tracker as at
-    R = at.evaluate_rpt(d, P, R0, m, label)
+    R = at.evaluate_rpt(d, P, R0, m, label, points=at.POINTS + (("cvend",) if a.freeze != "none" else ()))
     cli.write_csv(R, a, f"{name}_rpt.csv", note="read-out points of every RPT, errors in % of the ageing range")
     cli.write_csv(at.cv_table(d, P, R0, m, label), a, f"{name}_cv.csv", note="diagnostics of the constant-voltage holds")
     if len(R):
@@ -117,6 +131,10 @@ def main():
     p.add_argument("--hours", type=float, default=None, help="stop after this many simulated hours")
     p.add_argument("--resume", action="store_true", help="continue from the checkpoint of an interrupted run")
     p.add_argument("--no-guard", action="store_true", help="switch the state guard off (ablation)")
+    p.add_argument("--freeze", default="none", choices=["none", "voltage", "phase"], help="CV freeze: none (paper), voltage (measured V >= --freeze-above in charge), phase (CV segment of the protocol)")
+    p.add_argument("--freeze-above", type=float, default=4.195, help="threshold [V] of --freeze voltage")
+    p.add_argument("--cv-update", default="state", choices=["state", "none"], help="in the frozen steps: state = cell state updated, parameter rows of the gain zero; none = no measurement update")
+    p.add_argument("--cv-scope", default="rpt", choices=["rpt", "all"], help="--freeze phase: CV of the RPTs only (default) or also of the ageing cycles")
     p.add_argument("--chunk", type=int, default=None, help="steps per jitted chunk (default 20000, multiple of 20; the innovation window depends on it)")
     p.add_argument("--ref", default=None, help="reference file (default <data>/aging_dyn_rptslow_full.npz)")
     a = p.parse_args()
