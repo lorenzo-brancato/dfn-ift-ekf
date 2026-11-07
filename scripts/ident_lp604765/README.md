@@ -24,8 +24,14 @@ then on 2026-11-07 from `ParamIdentification/` to `scripts/ident_lp604765/` (dat
 | 0 | `sens_morris.py`, `plot_morris.py` | Morris screening on the three HPPCs (16 trajectories, 21 parameters) |
 | 2 | `fit.py` | least squares (TRF) on the HPPCs at 0/20/40 °C, parallel FD Jacobian, multi-start |
 | 3 | `validate.py` | open loop on the fit tests and the held-out tests, figures |
-| 4 | `fisher.py` | local sensitivity, Cramér–Rao bound, correlations |
-| export | `export_cellset.py` | `results/fit_v2/lp604765_cellset.json` for `dfnekf.cellset` (copied to `data/exp_LP604765/params/`) |
+| 4 | `fisher.py` | local sensitivity, Cramér–Rao bound, correlations (white noise; superseded by `ident.py`) |
+| 5 | `ident.py`, `profile_lik.py` | identifiability at an optimum: orthogonal ranking, collinearity index, N_eff from the residual autocorrelation; profile likelihood |
+| figs | `fig_ident.py` | `results/exp_LP604765/figs/fig_ident_*` (screening, residual, profiles, fits) |
+| export | `export_cellset.py` | `results/fit_v3b/lp604765_cellset.json` for `dfnekf.cellset` (copied to `data/exp_LP604765/params/`) |
+
+**Reported set: fit_v3b** (2026-11-07). 12 fitted groups; Ds_p, shape, Ea_r, the entropic terms and the anode groups
+come from the literature. The evidence for each choice is in [IDENTIFIABILITY.md](IDENTIFIABILITY.md). The
+fit_v2 notes below are the history that led to it.
 
 ## Choices and findings
 
@@ -79,6 +85,16 @@ closure 66 unknowns (dense Newton). That is the budget an embedded port has to m
 - **Overconfident band.** The ±2σ band covers the SOC error only 1-4 % of the time (σ of order 0.1 %). The 0.2 % agreement is real, but
   the filter's own error bar is not.
 - **Open loop at the right start: 32 mV**, against 23.9 mV in `validate.py`. The difference is the 50 % film split (the film acts in the kinetics) and the 1-s grid on rests.
+
+**With fit_v3b** (same filter settings; `results/exp_LP604765/ekf_v3b/`), the v2 values are in brackets:
+- Innovation RMSE 17.1 mV (19.3); open loop at the right start 31.5 mV (32.0).
+- SOC error in the 2nd half 0.31-0.36 % rms, max 0.50 % (0.21-0.24 %, max 0.46 %); settling below 2 % after 0.93 h (0.79 h).
+- Lithium drift −6.3 % (−9.1 %); anode-read SOC minus cathode-read SOC −12.9 % (−21.3 %).
+- Rf in the 2nd half 0.35-4.95 (0.48-6.95), median 1.5 in both.
+- The ±2σ band still covers 1-6 % of the time.
+
+The physically admissible set leaves less model error for Rf and the state to absorb. The SOC accuracy is the same within
+0.1 %. ms per step is not comparable: the run shared the machine with other jobs.
 
 ## Not done yet
 

@@ -118,7 +118,18 @@ def main():
     ap.add_argument("--max-nfev", type=int, default=60)
     ap.add_argument("--tag", default="v1")
     ap.add_argument("--from-json", default=None, help="start from a previous best.json only")
+    ap.add_argument("--free", default=None, help="free groups (comma list), default FREE")
+    ap.add_argument("--fix", default="", help="fixed values overriding NOMINAL, e.g. Ea_r=39570,dUdT_n=0 (literature)")
+    ap.add_argument("--bounds", default="", help="search boxes overriding common.BOUNDS, e.g. Ea_r=5e3:150e3")
+    ap.add_argument("--note", default="", help="free text stored in best.json (the justification of the choices)")
     a = ap.parse_args()
+    if a.free:
+        FREE[:] = a.free.split(",")
+    for k, v in (it.split("=") for it in a.fix.split(",") if it):
+        FIXED[k] = float(v)
+    for k, v in (it.split("=") for it in a.bounds.split(",") if it):
+        lo, hi = (float(x) for x in v.split(":"))
+        C.BOUNDS[k] = (lo, hi, C.BOUNDS[k][2])
     out = os.path.join(C.RES, "fit_" + a.tag)
     os.makedirs(out, exist_ok=True)
     logf = open(os.path.join(out, "log.txt"), "a", encoding="utf-8")
@@ -153,7 +164,8 @@ def main():
                 % (i, res["cost_mV"], res["per_test_mV"], res["wall_s"], s.nfev, res["at_bound"]))
             results.append(res)
             best = min(results, key=lambda r_: r_["cost_mV"])
-            json.dump(dict(best, free=FREE, fixed={k: v for k, v in FIXED.items() if k not in FREE}),
+            json.dump(dict(best, free=FREE, fixed={k: v for k, v in FIXED.items() if k not in FREE},
+                           bounds={k: list(C.BOUNDS[k]) for k in FREE}, note=a.note, argv=vars(a)),
                       open(os.path.join(out, "best.json"), "w"), indent=1)
     log("best start %d: %.2f mV" % (best["start"], best["cost_mV"]))
 

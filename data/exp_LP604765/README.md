@@ -9,8 +9,14 @@ the columns E (V), i (A, discharge negative) and T (s). `raw/02. Thermal …` an
 They are read by `dfnekf.datasets` (`lp_*` functions; I > 0 on discharge).
 
 **Identified set (committed).** `params/lp604765_cellset.json` (schema dfnekf-cellset-1, cell `LP01`) and
-`params/best.json` (the fit it was exported from). Both come from `scripts/ident_lp604765` (fit_v2: 17 free parameters,
-15.9 mV on the HPPCs). The working copies and every other output are in `results/exp_LP604765/`.
+`params/best.json` (the fit it was exported from) are **fit_v3b**, from `scripts/ident_lp604765`:
+- 12 fitted groups. The other 8 come from the literature: D_s,p, s_p and the anode groups from lm3c; E_a,r = 39.57 kJ/mol;
+  the entropic terms from O'Regan 2022.
+- 16.5 mV on the HPPCs, 28.9 mV mean on the held-out tests. No estimate at a bound; collinearity index 8.6.
+
+The selection is justified in `scripts/ident_lp604765/IDENTIFIABILITY.md`. The previous set, fit_v2 (17 groups,
+15.9 mV, not converged, E_a,r and dU/dT at their bounds), is kept as `params/*_v2.json`. The working copies and every
+other output are in `results/exp_LP604765/`.
 
 **Tests** (`datasets.load("exp_LP604765", <key>)`):
 
