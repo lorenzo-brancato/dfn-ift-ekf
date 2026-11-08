@@ -65,6 +65,9 @@ class Problem:
             c = float(np.sum(r ** 2))
             if c < self.best[0]:
                 self.best = (c, np.array(u))
+                if getattr(self, "ckpt", None):         # resumable: --from-json <out>/progress.json
+                    json.dump(dict(params=self.params(u), cost_mV=float(np.sqrt(c)), per_test_mV=self.per_test(r), nev=self.nev),
+                              open(self.ckpt, "w"), indent=1)
             self.log("  eval %4d  cost %.3f mV rms  %s" % (self.nev, np.sqrt(c), "  ".join("%s %.2f" % kv for kv in per.items())))
         return self.cache[key]
 
@@ -77,6 +80,40 @@ class Problem:
         return out
 
     def jac(self, u):
+        t0 = time.time()
+        J = self.jac_ift(u) if getattr(self, "mode", "fd") == "ift" else self.jac_fd(u)
+        self.t_jac = getattr(self, "t_jac", 0.0) + time.time() - t0; self.n_jac = getattr(self, "n_jac", 0) + 1
+        return J
+
+    def jac_ift(self, u):
+        """Exact Jacobian: per test, V and dV/dp from forward-mode AD through the model with the closure (and the
+        OCV start inversion) differentiated by the implicit function theorem (common._vjac, lpmodel ift=True);
+        then the chain rule to the unit coordinates, the voltage clip and the weights."""
+        p = self.params(u)
+        out = self.pool.map(C._vjac, [(k, list(FREE), p, False) for k in self.tests], chunksize=1)
+        dpdu = []
+        for j, n in enumerate(FREE):
+            lo, hi, kind = C.BOUNDS[n]
+            inside = 0.0 <= u[j] <= 1.0
+            dpdu.append((p[n] * np.log(hi / lo) if kind == "log" else hi - lo) if inside else 0.0)
+        dpdu = np.array(dpdu)
+        R, Jr = [], []
+        for (res, err), k in zip(out, self.tests):
+            if res is None:
+                raise RuntimeError("exact Jacobian failed on %s: %s" % (k, err))
+            V, Jp = res
+            Jp = np.where(np.isfinite(Jp), Jp, 0.0)        # a collapsed model (start far from the optimum) gives NaN rows
+            act = np.isfinite(V) & (V >= V_CLIP[0]) & (V <= V_CLIP[1])
+            R.append(self._res(V, k))
+            Jr.append((1e3 * self.w[k] * act)[:, None] * Jp * dpdu[None, :])
+        r = np.concatenate(R)
+        key = tuple(np.round(u, 14))
+        if key not in self.cache:                        # the primal comes with the Jacobian: no extra simulation
+            self.cache = {key: r}
+        self.nev += 1
+        return np.concatenate(Jr, axis=0)
+
+    def jac_fd(self, u):
         r0 = self.fun(u)
         U = []
         hs = []
@@ -99,6 +136,8 @@ def morris_starts(prof, n):
         if k not in prof:
             continue
         Vc = np.clip(np.nan_to_num(V, nan=V_CLIP[0]), *V_CLIP) if V is not None else None
+        if Vc is not None and len(Vc) != len(prof[k]["V"]):
+            continue                    # run made on another profile (older step classes): not comparable
         e = np.inf if Vc is None else np.sum((C.weights(prof[k]) * (Vc - prof[k]["V"])) ** 2)
         cost[(ti, pi)] = cost.get((ti, pi), 0.0) + e
         params[(ti, pi)] = p
@@ -122,9 +161,15 @@ def main():
     ap.add_argument("--fix", default="", help="fixed values overriding NOMINAL, e.g. Ea_r=39570,dUdT_n=0 (literature)")
     ap.add_argument("--bounds", default="", help="search boxes overriding common.BOUNDS, e.g. Ea_r=5e3:150e3")
     ap.add_argument("--note", default="", help="free text stored in best.json (the justification of the choices)")
+    ap.add_argument("--jac", default="fd", choices=("fd", "ift"), help="Jacobian: forward differences (fd) or exact, by AD with the IFT (ift)")
+    ap.add_argument("--tests", default="hppc", help="fit set: hppc (the three HPPCs) or B (+ full 1C cycles at 0/20/40 C), or a list")
+    ap.add_argument("--ocp-p", default=None, help="cathode OCP table (ocp_sub.py json) instead of lm3c")
     a = ap.parse_args()
+    if a.ocp_p:
+        os.environ["LP_OCP_P"] = os.path.abspath(a.ocp_p)       # inherited by the worker processes
     if a.free:
         FREE[:] = a.free.split(",")
+    TESTS[:] = C.TEST_SETS.get(a.tests, a.tests.split(","))
     for k, v in (it.split("=") for it in a.fix.split(",") if it):
         FIXED[k] = float(v)
     for k, v in (it.split("=") for it in a.bounds.split(",") if it):
@@ -144,12 +189,18 @@ def main():
     else:
         starts.append((np.array([C.to_unit(n, FIXED[n]) for n in FREE]), np.nan))
     starts += morris_starts(prof, a.starts)
+    if len(starts) - 1 < a.starts:      # no comparable screening runs: seeded perturbations of the first start
+        rg = np.random.default_rng(0)
+        for _ in range(a.starts - (len(starts) - 1)):
+            starts.append((np.clip(starts[0][0] + rg.uniform(-0.05, 0.05, len(FREE)), 0.0, 1.0), np.nan))   # small: the window groups collapse the model beyond a few %
     log("free: %s\nfixed: %s\n%d starts" % (FREE, {k: v for k, v in FIXED.items() if k not in FREE}, len(starts)))
     results = []
     with C.pool(TESTS, a.workers) as pl:
         for i, (u0, c0) in enumerate(starts):
             log("=== start %d (screening cost %.1f mV)" % (i, c0))
             pb = Problem(pl, TESTS, prof, log)
+            pb.ckpt = os.path.join(out, "progress.json")
+            pb.mode = a.jac
             t0 = time.time()
             s = least_squares(pb.fun, np.clip(u0, 1e-3, 1 - 1e-3), jac=pb.jac, bounds=(0.0, 1.0), method="trf",
                               x_scale="jac", max_nfev=a.max_nfev, xtol=1e-6, ftol=1e-6, gtol=1e-8)
@@ -162,6 +213,8 @@ def main():
             json.dump(res, open(os.path.join(out, "start_%d.json" % i), "w"), indent=1)
             log("start %d: cost %.2f mV  %s  (%.0f s, nfev %d, at bound %s)"
                 % (i, res["cost_mV"], res["per_test_mV"], res["wall_s"], s.nfev, res["at_bound"]))
+            res.update(jac=a.jac, n_jac=getattr(pb, "n_jac", 0), t_jac_s=getattr(pb, "t_jac", 0.0))
+            log("   Jacobians (%s): %d, %.0f s in total, %.1f s each" % (a.jac, res["n_jac"], res["t_jac_s"], res["t_jac_s"] / max(res["n_jac"], 1)))
             results.append(res)
             best = min(results, key=lambda r_: r_["cost_mV"])
             json.dump(dict(best, free=FREE, fixed={k: v for k, v in FIXED.items() if k not in FREE},

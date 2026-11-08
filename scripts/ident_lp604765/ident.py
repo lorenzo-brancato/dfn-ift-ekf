@@ -56,6 +56,27 @@ def jacobian(p0, names, workers, h):
     return J, r0, prof
 
 
+def jacobian_ift(p0, names, workers):
+    """Exact d r / d ln(theta) by AD with the IFT (common._vjac), one worker per test: theta dV/dtheta, weighted,
+    zero where the voltage clip is active."""
+    p0 = dict(C.NOMINAL, **p0)
+    prof = C.profiles(Fm.TESTS)
+    w = {k: C.weights(prof[k]) / np.sqrt(len(Fm.TESTS)) for k in Fm.TESTS}
+    th = np.array([max(abs(p0[n]), 1e-12) for n in names])
+    with C.pool(Fm.TESTS, workers) as pl:
+        out = pl.map(C._vjac, [(k, list(names), p0, False) for k in Fm.TESTS], chunksize=1)
+    R, J = [], []
+    for (res, err), k in zip(out, Fm.TESTS):
+        if res is None:
+            raise RuntimeError("%s: %s" % (k, err))
+        V, Jp = res
+        Vc = np.clip(np.nan_to_num(V, nan=Fm.V_CLIP[0]), *Fm.V_CLIP)
+        act = np.isfinite(V) & (V >= Fm.V_CLIP[0]) & (V <= Fm.V_CLIP[1])
+        R.append(1e3 * w[k] * (Vc - prof[k]["V"]))
+        J.append((1e3 * w[k] * act)[:, None] * Jp * th[None, :])
+    return np.concatenate(J), np.concatenate(R), prof
+
+
 def tau_int(x):
     x = x - x.mean()
     n = len(x)
@@ -81,7 +102,13 @@ def main():
     ap.add_argument("--tag", default="v2")
     ap.add_argument("--reuse", action="store_true", help="reuse the saved Jacobian of this tag")
     ap.add_argument("--sets", default="", help="candidate free sets: lab=a,b,c;lab2=...")
+    ap.add_argument("--jac", default="fd", choices=("fd", "ift"), help="Jacobian: central differences or exact (IFT)")
+    ap.add_argument("--tests", default="hppc", help="fit set: hppc, B, or a list (as fit.py)")
+    ap.add_argument("--ocp-p", default=None, help="cathode OCP table (ocp_sub.py json), as in the fit")
     a = ap.parse_args()
+    Fm.TESTS[:] = C.TEST_SETS.get(a.tests, a.tests.split(","))
+    if a.ocp_p:
+        os.environ["LP_OCP_P"] = os.path.abspath(a.ocp_p)
     out = os.path.dirname(os.path.abspath(a.fit))
     best = json.load(open(a.fit))
     p0 = dict(C.NOMINAL, **best["params"])
@@ -93,7 +120,7 @@ def main():
         J, r0 = z["J"], z["r0"]
         prof = C.profiles(Fm.TESTS)
     else:
-        J, r0, prof = jacobian(p0, names, a.workers, a.h)
+        J, r0, prof = jacobian_ift(p0, names, a.workers) if a.jac == "ift" else jacobian(p0, names, a.workers, a.h)
         np.savez(fj, J=J, r0=r0, names=np.array(names))
     # per-test bookkeeping (residual r = w e, w = sqrt(dt / (T_k n_tests)); e [mV] = r / w)
     nk = [len(prof[k]["V"]) for k in Fm.TESTS]

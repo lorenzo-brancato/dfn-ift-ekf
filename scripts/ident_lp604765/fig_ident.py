@@ -199,10 +199,11 @@ def xform(nm, pref):
 
 SETLAB = {"fit_v2": "v2: 17 groups (not converged)", "fit_v2b": "v2b: 17 groups (reference)",
           "fit_v3a": r"v3a: 15 ($D_{s,p}$, $s_p$ lm3c)", "fit_v3b": r"v3b: 12 (+ lit. $E_{a,r}$, $\partial_T U$)"}
-SETCOL = {"fit_v2": "0.8", "fit_v2b": "0.5", "fit_v3a": "C1", "fit_v3b": "C0"}
+SETCOL = {"fit_v2": "0.8", "fit_v2b": "0.5", "fit_v3a": "C1", "fit_v3b": "C0", "fit_v4a": "C2", "fit_v4b": "C3", "fit_v5": "C4"}
+SETLAB.update({"fit_v4a": "v4a: set B, 12 groups (FD)", "fit_v4b": "v4b: set B, 17 groups (FD)", "fit_v5": "v5: set B, 17 groups, exact IFT Jacobian, OCP by subtraction"})
 
 
-def fig_fits(tags):
+def fig_fits(tags, order=None, split=3, name="fig_ident_fits"):
     rows = []
     for tag in tags:
         f = os.path.join(RES, tag, "validation.csv")
@@ -211,7 +212,7 @@ def fig_fits(tags):
     if not rows:
         print("no validation.csv yet"); return
     d = pd.concat(rows)
-    order = ["HPPC00", "HPPC20", "HPPC40", "CYC20", "CAP00", "CAP20", "CAP40"]
+    order = order or ["HPPC00", "HPPC20", "HPPC40", "CYC20", "CAP00", "CAP20", "CAP40"]
     sets = list(dict.fromkeys(d["set"]))
     fig, ax = plt.subplots(figsize=(170 * mm, 60 * mm), layout="constrained")
     x = np.arange(len(order)); wb = 0.8 / len(sets)
@@ -223,13 +224,13 @@ def fig_fits(tags):
             if np.isfinite(vi):
                 ax.text(xi + (i - (len(sets) - 1) / 2) * wb, vi + 0.4, "%.0f" % vi, ha="center", fontsize=5.5)
     ax.set_ylim(0, ax.get_ylim()[1] * 1.12)
-    ax.axvline(2.5, color="k", lw=0.6, ls=":")
-    ax.text(1.0, ax.get_ylim()[1] * 0.97, "fit", ha="center", va="top", fontsize=8)
-    ax.text(4.5, ax.get_ylim()[1] * 0.97, "held out", ha="center", va="top", fontsize=8)
+    ax.axvline(split - 0.5, color="k", lw=0.6, ls=":")
+    ax.text((split - 1) / 2, ax.get_ylim()[1] * 0.97, "fit", ha="center", va="top", fontsize=8)
+    ax.text((split + len(order) - 1) / 2, ax.get_ylim()[1] * 0.97, "held out", ha="center", va="top", fontsize=8)
     ax.set_xticks(x, order); ax.set_ylabel("RMSE [mV]")
     ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(0.0, 0.92))
     ax.spines[["top", "right"]].set_visible(False)
-    save(fig, "fig_ident_fits")
+    save(fig, name)
 
 
 def main():
@@ -249,6 +250,8 @@ def main():
         fig_profiles(a.ref, a.old, a.with_old)
     if "fits" in todo:
         fig_fits(a.sets.split(","))
+    if "fitsB" in todo:
+        fig_fits(["fit_v3b", "fit_v4a", "fit_v4b", "fit_v5"], order=["HPPC00", "HPPC20", "HPPC40", "CAP00F", "CAP40F", "AGE22C2", "AGE22V", "CAP20"], split=6, name="fig_ident_fits_B")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fit", default=os.path.join(C.RES, "fit_v2", "best.json"))
     ap.add_argument("--out", default=None)
+    ap.add_argument("--ocp-p", default=None, help="cathode OCP table used by the fit (ocp_sub.py json)")
     a = ap.parse_args()
+    if a.ocp_p:
+        os.environ["LP_OCP_P"] = os.path.abspath(a.ocp_p)
     best = json.load(open(a.fit))
     p = C.model_params(best["params"])
     m = Model()
@@ -32,6 +35,10 @@ def main():
     keep = ("Ln", "Ls", "Lp", "Rn", "Rp", "eps_en", "eps_es", "eps_ep", "eps_sn", "eps_sp", "brug", "sig_n", "sig_p", "alpha",
             "Ds_n", "Ds_p", "De", "kappa", "tplus", "tdf", "ce0", "Rf0", "area", "R_contact")
     e = lm["temperature"]["electrolyte"]
+    ocp = dict(lm["ocp"])
+    if a.ocp_p:                                            # this cell's cathode OCP (by subtraction), as in the fit
+        tab = json.load(open(a.ocp_p, encoding="utf-8"))
+        ocp["p"] = dict(y=tab["y"], U=tab["U"], source=os.path.abspath(a.ocp_p))
     y_end = min(p["y100"] + Q_CELL / p["Q_p"], 0.999)
     x0 = p["x100"] - Q_CELL / p["Q_n"]
     out = {
@@ -40,7 +47,8 @@ def main():
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "source": {"fit": os.path.abspath(a.fit), "cost_mV": best["cost_mV"], "per_test_mV": best["per_test_mV"],
                    "free": best.get("free"), "base_set": lm["id"],
-                   "note": "LP604765 (CNR STEMS, BATTAGE), HPPC 0/20/40 C; OCPs of lm3c (NMC532 table, Mohtat2020 graphite)"},
+                   "note": "LP604765 (CNR STEMS, BATTAGE); anode OCP Mohtat2020 graphite; cathode OCP: " + (os.path.basename(a.ocp_p) if a.ocp_p else "lm3c NMC532 table"),
+                   "tests": best.get("argv", {}).get("tests", "hppc")},
         "T_ref_K": T_REF,
         "P": {k: float(P[k]) for k in keep},
         "temperature": dict(Ea_Dn=p["Ea_Dn"], Ea_Dp=p["Ea_Dp"], Ea_r=p["Ea_r"], Ea_s=p["Ea_s"], dUdT0=p["dUdT0"],
@@ -49,7 +57,7 @@ def main():
                                              De=[v / p["tau"] for v in e["De"]])),
         "dp_law": dict(drop=p["drop"], shape=p["shape"], y0=p["y100"], y1=y_end,
                        note="D_p = Ds_p 10^(-drop u^shape), u = max(y - y0, 0) / (y1 - y0), y the mean stoichiometry"),
-        "ocp": lm["ocp"],
+        "ocp": ocp,
         "cells": {"LP01": dict(Q_n=p["Q_n"], Q_p=p["Q_p"], x100=p["x100"], y100=p["y100"], x0=x0, y0=y_end,
                                cmax_n=float(P["cmax_n"]), cmax_p=float(P["cmax_p"]), k0_n=float(P["k0_n"]),
                                k0_p=float(P["k0_p"]), q_ocv_Ah=Q_CELL)},

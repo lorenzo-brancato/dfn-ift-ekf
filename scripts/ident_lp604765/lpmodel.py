@@ -64,11 +64,18 @@ def _table(x, U):
 
 
 class Model:
-    def __init__(self, dims=(10, 6, 10, 12), grid="4:1", K=2, dts=(1.0, 5.0, 20.0)):
+    def __init__(self, dims=(10, 6, 10, 12), grid="4:1", K=2, dts=(1.0, 5.0, 20.0), ift=False):
+        """ift: closure solved by Closure.solve_ift (derivatives by the implicit function theorem, for gradient-based
+        fits); the values are the same as with solve_robust."""
         self.cs = json.load(open(LM3C, encoding="utf-8"))
         self.dims, self.grid, self.K, self.dts = dims, grid, K, tuple(float(d) for d in dts)
+        self.ift = ift
         self.ocp_n = _table(self.cs["ocp"]["n"]["x"], self.cs["ocp"]["n"]["U"])
         self.ocp_p = _table(self.cs["ocp"]["p"]["y"], self.cs["ocp"]["p"]["U"])
+        self.ocp_p_source = "lm3c"
+        if os.environ.get("LP_OCP_P"):              # cathode OCP of this cell (ocp_sub.py), e.g. by subtraction
+            tab = json.load(open(os.environ["LP_OCP_P"], encoding="utf-8"))
+            self.ocp_p = _table(tab["y"], tab["U"]); self.ocp_p_source = os.environ["LP_OCP_P"]
         c = self.cs["cells"]["C01"]
         P0 = self.cs["P"]
         self.scale = Q_CELL / 4.91                # area ratio to the Mohtat cell (C01 C/20 capacity 4.91 A.h)
@@ -114,12 +121,16 @@ class Model:
         U = np.asarray(self.ocp_p(jnp.asarray(y))) - np.asarray(self.ocp_n(jnp.asarray(x)))
         return U + (T_C + 273.15 - T_REF) * (p["dUdT0"] + p["dUdT_n"] * (x - 0.5))
 
-    def dq_from_ocv(self, p, T_C, V, lo=-0.4, hi=0.6, n=4001):
+    def dq_from_ocv(self, p, T_C, V, lo=-0.4, hi=2.4, n=11201):     # 0.25 mAh grid, down to the bottom of the window
         """Inverse of ocv on [lo, hi] A.h (monotone there): the start of a held-out test from its rested voltage."""
         q = np.linspace(lo, hi, n)
         v = self.ocv(p, T_C, q)
         i = int(np.argmin(np.abs(v - V)))
-        return float(q[i])
+        # linear refinement between the bracketing grid points: dq is then continuous in p (a grid snap makes it a
+        # staircase, which corrupts finite-difference Jacobians of the window groups)
+        j = i if (i + 1 < n and (v[i] - V) * (v[i + 1] - V) <= 0) else max(i - 1, 0)
+        den = v[j + 1] - v[j]
+        return float(q[j] + (V - v[j]) * (q[j + 1] - q[j]) / den) if abs(den) > 1e-15 else float(q[i])
 
     def c0(self, p, P, dq):
         q = p["dq"] if dq is None else dq
@@ -143,6 +154,47 @@ class Model:
         dT, d0, dn, _ = P["entropic"]
         out.update(c0n=c0n, c0p=c0p, dT=dT, dUdT0=d0, dUdT_n=dn, **{"law_" + k: v for k, v in P["dp_law"].items()})
         return {k: jnp.asarray(float(v)) for k, v in out.items()}
+
+    # ---- differentiable twins (exact-gradient fits): p holds jnp scalars, T_C is a constant of the test
+    def traced_jax(self, p, T_C, dq):
+        """traced() in jnp: the leaves as differentiable functions of the fit groups p (dict of jnp scalars) and dq."""
+        P0 = self.cs["P"]
+        T = float(T_C) + 273.15
+        ark = (1.0 / T - 1.0 / T_REF) / R_GAS
+        cmax_n = p["Q_n"] * 3600 / (F * self.area * P0["Ln"] * P0["eps_sn"])
+        cmax_p = p["Q_p"] * 3600 / (F * self.area * P0["Lp"] * P0["eps_sp"])
+        fr = jnp.exp(-p["Ea_r"] * ark)
+        e = self.cs["temperature"]["electrolyte"]
+        out = dict(
+            cmax_n=cmax_n, cmax_p=cmax_p,
+            Ds_n=p["Ds_n"] * jnp.exp(-p["Ea_Dn"] * ark), Ds_p=p["Ds_p"] * jnp.exp(-p["Ea_Dp"] * ark),
+            k0_n=p["k0_n"] * self.j0n_ref / (0.5 * cmax_n * np.sqrt(P0["ce0"])) * fr,
+            k0_p=p["k0_p"] * self.j0p_ref / (0.5 * cmax_p * np.sqrt(P0["ce0"])) * fr,
+            R_contact=p["R_contact"] * jnp.exp(p["Ea_s"] * ark),
+            kappa=float(np.interp(T, e["T_K"], e["kappa"])) / p["tau"], De=float(np.interp(T, e["T_K"], e["De"])) / p["tau"],
+            T=jnp.asarray(T), dT=jnp.asarray(T - T_REF), dUdT0=p["dUdT0"], dUdT_n=p["dUdT_n"],
+            c0n=(p["x100"] - dq / p["Q_n"]) * cmax_n, c0p=(p["y100"] + dq / p["Q_p"]) * cmax_p,
+            law_drop=p["drop"], law_shape=p["shape"], law_y0=p["y100"],
+            law_y1=jnp.minimum(p["y100"] + Q_CELL / p["Q_p"], 0.999))
+        return {k: jnp.asarray(v, dtype=jnp.float64) for k, v in out.items()}
+
+    def ocv_jax(self, p, T_C, dq):
+        x = p["x100"] - dq / p["Q_n"]; y = p["y100"] + dq / p["Q_p"]
+        return self.ocp_p(y) - self.ocp_n(x) + (T_C + 273.15 - T_REF) * (p["dUdT0"] + p["dUdT_n"] * (x - 0.5))
+
+    def dq_from_ocv_jax(self, p, T_C, V):
+        """dq_from_ocv with IFT derivatives: the grid inversion (no gradient), then one Newton correction on
+        ocv(p, dq) = V through which d dq / d p = -(d ocv / d p) / (d ocv / d dq) flows (slope held constant)."""
+        sg = jax.lax.stop_gradient
+        ps = {k: sg(v) for k, v in p.items()}
+        dq0 = self._dq_grid_jax(ps, T_C, V)
+        slope = sg(jax.grad(lambda d: self.ocv_jax(ps, T_C, d))(dq0))
+        return dq0 - (self.ocv_jax(p, T_C, dq0) - V) / slope
+
+    def _dq_grid_jax(self, p, T_C, V, lo=-0.4, hi=2.4, n=11201):
+        q = jnp.linspace(lo, hi, n)
+        v = self.ocv_jax(p, T_C, q)
+        return jax.lax.stop_gradient(q[jnp.argmin(jnp.abs(v - V))])
 
     def _bind(self, q):
         """A shallow copy of the base DFN whose parameter-dependent pieces are rebuilt from the traced leaves q."""
@@ -181,7 +233,7 @@ class Model:
             Ek, Gk = E[k], G[k]
             imp = (kf(Cn), kf(Cp), Ek, Gk)
             csn, csp, _ = m.surf(z)
-            g, res, nit = A_.solve_robust(g, csn, csp, ce, Ik, th, tol=1e-9, imp=imp)
+            g, res, nit = (A_.solve_ift if self.ift else A_.solve_robust)(g, csn, csp, ce, Ik, th, tol=1e-9, imp=imp)
             V = A_.V_of(g, Ik, csn, csp)
             jn, jp = g[:Nn_], g[Nn_:Nn_ + m.Np]
             stn = pt.step((c[:Nn_], a[:, :Nn_], s[:, :Nn_]), jn, Cn)
@@ -192,7 +244,12 @@ class Model:
             return (z2, g), out
 
         csn0, csp0, ce0 = m.surf(z0)
-        g0 = A_.newton(A_.guess(csn0, csp0, I[0], th), csn0, csp0, ce0, I[0], th)[0]
+        if self.ift:                                   # only a warm start: its value matters, not its derivative
+            sg = jax.lax.stop_gradient; As = A_._stopped()
+            a0 = [sg(v) for v in (csn0, csp0, ce0, I[0], th)]
+            g0 = sg(As.newton(As.guess(a0[0], a0[1], a0[3], a0[4]), *a0)[0])
+        else:
+            g0 = A_.newton(A_.guess(csn0, csp0, I[0], th), csn0, csp0, ce0, I[0], th)[0]
         return jax.lax.scan(body, (z0, g0), (I, dt, idx))[1]
 
     def simulate(self, p, prof, T_C, dq=None, full=False):

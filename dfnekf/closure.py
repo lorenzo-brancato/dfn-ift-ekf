@@ -324,3 +324,32 @@ class Alg:
                 return jax.lax.cond(bad(rb), cont, lambda _: (gb, rb, kb), None)
             return jax.lax.cond(bad(r_), cold, lambda _: (g_, r_, k_), None)
         return jax.lax.cond(bad(r), retry, lambda _: (g, r, k), None)
+
+    def solve_ift(self, gprev, csn, csp, ce, I, th, tol=1e-10, imp=None):
+        """solve_robust with implicit-function-theorem derivatives (forward and reverse mode).
+
+        The solution g* is found without gradients; one Newton correction is then applied through which the
+        derivatives flow:  g = g* - F_g(g*)^-1 F(g*, p),  with F_g held constant. Its value is g* (F(g*) = 0 to the
+        solver tolerance) and its derivative with respect to anything F depends on (the parameters in self.P, the
+        surface and electrolyte concentrations, I, th) is exactly dg = -F_g^-1 dF, the IFT. The Newton iterations,
+        line searches and fallbacks of solve_robust are never differentiated."""
+        sg = jax.lax.stop_gradient
+        st = self._stopped()
+        imp_s = None if imp is None else jax.tree_util.tree_map(sg, imp)
+        g_s, r, k = st.solve_robust(sg(gprev), sg(csn), sg(csp), sg(ce), sg(I), sg(th), tol=tol, imp=imp_s)
+        g_s = sg(g_s)
+        J = st.jac(g_s, sg(csn), sg(csp), sg(ce), sg(I), sg(th), imp_s)
+        F = self.residual(g_s, csn, csp, ce, I, th, imp)
+        return g_s - jnp.linalg.solve(J, F), r, k
+
+    def _stopped(self):
+        """A shallow copy whose array attributes and parameter values carry no derivatives (parameters may be traced)."""
+        import copy as _copy
+        sg = jax.lax.stop_gradient
+        arr = lambda v: sg(v) if isinstance(v, jax.Array) else v
+        o = _copy.copy(self)
+        for k_, v in vars(self).items():
+            if isinstance(v, jax.Array):
+                setattr(o, k_, sg(v))
+        o.P = {k_: (jax.tree_util.tree_map(arr, v) if isinstance(v, (tuple, list, dict, jax.Array)) else v) for k_, v in self.P.items()}
+        return o

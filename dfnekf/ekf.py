@@ -200,7 +200,9 @@ class EKF:
             f_u = (L["f"] - x0) / scale
             Us = U / scale[:, None]; Vts = Vt * scale[None, :]; hs = h * scale
             Ph = P @ hs; Sy = hs @ Ph + R; K = Ph / Sy
-            innov = yk - L["V"]; du = K * innov
+            innov = yk - L["V"]
+            ok_y = jnp.isfinite(yk)                                                          # y = NaN: no voltage update (masked sample)
+            K = jnp.where(ok_y, K, 0.0); du = K * jnp.where(ok_y, innov, 0.0)
             M_ = P - jnp.outer(K, Ph)
             Pp = M_ - jnp.outer(M_ @ hs, K) + R * jnp.outer(K, K)
             Pp = 0.5 * (Pp + Pp.T) + self.jitter * jnp.eye(n)
@@ -251,6 +253,7 @@ class EKF:
 
     def run(self, x0, P0d, Qd, R, Iseq, y, x_true=None, tfac=None):
         """tfac: optional per-step factor on theta[2] (see f_and_lin), same length as Iseq.
+        y: measured voltage; NaN entries are masked samples (prediction only; the lithium pseudo-measurement still applies).
         P0d: the initial standard deviations (1-D, physical units), or a full initial covariance (2-D, n x n, physical units)."""
         temp = tfac is not None
         full = np.ndim(P0d) == 2

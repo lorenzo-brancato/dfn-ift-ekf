@@ -40,7 +40,13 @@ def main():
     ap.add_argument("--max-nfev", type=int, default=30)
     ap.add_argument("--workers", type=int, default=26)
     ap.add_argument("--tag", default="v2")
+    ap.add_argument("--jac", default="fd", choices=("fd", "ift"))
+    ap.add_argument("--tests", default="hppc", help="fit set: hppc, B, or a list (as fit.py)")
+    ap.add_argument("--ocp-p", default=None, help="cathode OCP table (ocp_sub.py json), as in the fit")
     a = ap.parse_args()
+    Fm.TESTS[:] = C.TEST_SETS.get(a.tests, a.tests.split(","))
+    if a.ocp_p:
+        os.environ["LP_OCP_P"] = os.path.abspath(a.ocp_p)
     out = os.path.dirname(os.path.abspath(a.fit))
     best = json.load(open(a.fit))
     idn = json.load(open(a.ident))
@@ -68,6 +74,7 @@ def main():
                 Fm.FREE[:] = free
                 Fm.FIXED.clear(); Fm.FIXED.update({k: p_opt[k] for k in C.BOUNDS}); Fm.FIXED[nm] = v
                 pb = Fm.Problem(pl, Fm.TESTS, prof, lambda s: None)
+                pb.mode = a.jac
                 u0 = np.clip([C.to_unit(f, p_opt[f]) for f in free], 1e-3, 1 - 1e-3)
                 t0 = time.time()
                 s = least_squares(pb.fun, u0, jac=pb.jac, bounds=(0.0, 1.0), method="trf", x_scale="jac",

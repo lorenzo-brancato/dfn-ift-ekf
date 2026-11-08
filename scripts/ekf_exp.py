@@ -99,7 +99,7 @@ def main():
     ap.add_argument("--li-sigma", type=float, default=None,
                     help="relative sd of the lithium pseudo-measurement (total lithium of the state = the window's); off by default")
     # soc experiment
-    ap.add_argument("--soc-err", default="-0.4,0,0.4", help="[soc] initial charge errors [A.h] (+ = filter starts emptier)")
+    ap.add_argument("--soc-err", default="0", help="[soc] initial charge errors [A.h] (+ = filter starts emptier); 0 = the placed start only")
     ap.add_argument("--p0-q", type=float, default=0.5, help="[soc] sd of the initial charge [A.h]")
     ap.add_argument("--no-openloop", action="store_true")
     # params experiment
@@ -117,6 +117,9 @@ def main():
                     help="with --t-input: the temperature rise above the run's 5th percentile is multiplied by this (core vs surface)")
     ap.add_argument("--p-mult", default="", help="multipliers on P after the temperature laws, e.g. De=2,kappa=1.5 (k0 = both k0_n, k0_p)")
     ap.add_argument("--max-hours", type=float, default=None)
+    ap.add_argument("--mask-vmax", type=float, default=None, help="no voltage update while charging at V >= this (late CC, CV) [V]")
+    ap.add_argument("--mask-vmin", type=float, default=None, help="no voltage update at V <= this (end-of-discharge knee) [V]")
+    ap.add_argument("--mask-hold-s", type=float, default=300.0, help="the mask-vmin mask is held this long after the voltage recovers [s]")
     ap.add_argument("--grid", default="4:1")
     ap.add_argument("--dims", default=None, help="Nn,Ns,Np,Nm")
     ap.add_argument("--dt", type=float, default=None, help="filter step [s] (default: the dataset's)")
@@ -175,6 +178,24 @@ def main():
     else:
         y = d["V"]
     ok = np.asarray(d["valid"], bool)
+    mask = np.zeros(len(y), bool)
+    if a.mask_vmax or a.mask_vmin:
+        # no voltage update where the model is known to be poor: the top of charge (charging at V >= mask_vmax: late CC
+        # and CV) and the end-of-discharge knee (V <= mask_vmin) plus the following mask_hold_s (relaxation from it)
+        if a.mask_vmax:
+            mask |= (I_np < -0.02) & (y >= a.mask_vmax)
+        if a.mask_vmin:
+            low = y <= a.mask_vmin
+            hold = int(round(a.mask_hold_s / dt))
+            last = -10 ** 9
+            for i in range(len(y)):
+                if low[i]:
+                    last = i
+                if i - last <= hold:
+                    mask[i] = True
+        print("masked: %.1f %% of the samples" % (100 * mask.mean()), flush=True)
+    y_f = np.where(mask, np.nan, y)
+    ok = ok & ~mask
     tfac = None
     if a.t_input:
         Tc = pd.Series(d["T"]).rolling(max(1, int(round(60 / dt))), center=True, min_periods=1).mean().values
@@ -194,7 +215,7 @@ def main():
     sd_shell = a.p0_shell * np.concatenate([np.full(m.Nn, P["cmax_n"]), np.full(m.Np, P["cmax_p"])])
     sd_rest = np.concatenate([np.full(m.Nm * nel, 1.0), np.full(m.K * nel, 1.0), np.full(m.N, 3.0)])
     R = (a.sigma_mV * 1e-3) ** 2
-    run = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I, jnp.asarray(y), tfac=tfac))
+    run = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I, jnp.asarray(y_f), tfac=tfac))
     rows = []
     if a.start == "soc":
         rows = run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w, sd_shell, sd_rest, dt, tag, I, th_true)
@@ -249,7 +270,7 @@ def main():
                  xbar=H["xbar"], ybar=H["ybar"], sd_xbar=H["sd_xbar"], sd_ybar=H["sd_ybar"], q0=q0, T_C=d["T"],
                  eis=(~ok).astype(int), dt=dt, cell=cell, test=d["test"], twin=a.twin, sigma_mV=a.sigma_mV, seed=seed,
                  cycle=-1 if a.cycle is None else a.cycle, SOH_ref=meta.get("SOH_ref", np.nan), dx_window_n=P["dx_window_n"],
-                 n_first=meta.get("n_first", 0), n_cycles=a.n_cycles if a.cycle is not None else 0)
+                 n_first=meta.get("n_first", 0), n_cycles=a.n_cycles if a.cycle is not None else 0, masked=mask)
         plot_params(a, t, vals, sd, tv, coords, H, ok, cell, d["test"], seed, row, tag)
     pd.DataFrame(rows).to_csv(os.path.join(a.results, "ekf_%s.csv" % tag), index=False)
 
@@ -297,7 +318,7 @@ def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w,
         innov = H["innov"] * 1e3
         half = len(t) // 2
         row = dict(test=d["test"], kind="ekf", err_Ah=e, wall_s=wall, ms_per_step=1e3 * wall / len(t),
-                   innov_rmse_mV=float(np.sqrt(np.mean(innov ** 2))), finite=bool(np.all(H["finite"])),
+                   innov_rmse_mV=float(np.sqrt(np.nanmean(innov ** 2))), finite=bool(np.all(H["finite"])),
                    soc_err_end_pct=float(es[-1]), soc_err_rms_2nd_half_pct=float(np.sqrt(np.mean(es[half:] ** 2))),
                    soc_err_max_2nd_half_pct=float(np.max(np.abs(es[half:]))), t_settle_2pct_h=t_set / 3600,
                    t_first_2pct_min=float(t[k10] / 60) if k10 >= 0 else np.nan,

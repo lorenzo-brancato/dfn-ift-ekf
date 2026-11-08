@@ -65,7 +65,40 @@ LP_VAL = {
     "CAP40": dict(test="20261013_Capacity_40°C", start_step=2, end_step=4, T=40.0, dq="ocv"),
     "CAP00": dict(test="20261016_Capacity_00°C", start_step=2, end_step=4, T=0.0, dq="ocv"),
 }
-LP_TESTS = {**LP_FIT, **LP_VAL}
+# ageing blocks: 25 x (1C CC-CV charge, 1C discharge to 2.75 V, 5 min rest) at 20 C, 68 h each. Start at the end of the
+# first 5-min rest (bottom of charge), placed by OCV inversion.
+LP_AGE = {
+    "AGE22": dict(test="20261022_Ageing", start_step=2, T=20.0, dq="ocv"),
+    "AGE27": dict(test="20261027_Ageing", start_step=2, T=20.0, dq="ocv"),
+    "AGE30": dict(test="20261030_Ageing", start_step=2, T=20.0, dq="ocv"),
+}
+# fit set B: full 1C cycles (discharge, CC-CV charge, rest), so that the end-of-discharge knee and the CV phase are in
+# the fit at 0 / 20 / 40 C. Capacity tests: steps 2-5 (discharge from the rested top, 60 s rest, CC-CV charge, 1 h rest).
+# Ageing block 20261022 (beginning of life, no fade): cycle 2, from the end of the 5-min rest after its CC-CV charge to
+# the end of the next one (discharge with the knee, 5-min rest at the bottom, CC-CV charge, 5-min rest at the top).
+# (A start at the bottom rest is ill-posed: 5 min after a 1C discharge the voltage is far from the OCV.)
+LP_FIT_B = {
+    "CAP00F": dict(test="20261016_Capacity_00°C", start_step=2, end_step=6, T=0.0, dq="ocv"),
+    "CAP40F": dict(test="20261013_Capacity_40°C", start_step=2, end_step=6, T=40.0, dq="ocv"),
+    "AGE22C2": dict(test="20261022_Ageing", start_time=15116.0, end_time=24896.0, T=20.0, dq="ocv"),
+}
+# held out with set B: cycles 5-7 of the same block, same windowing (CYC20, cycles 1-4, overlaps the fit cycle)
+LP_VAL_B = {"AGE22V": dict(test="20261022_Ageing", start_time=44430.0, end_time=73745.0, T=20.0, dq="ocv")}
+LP_TESTS = {**LP_FIT, **LP_VAL, **LP_AGE, **LP_FIT_B, **LP_VAL_B}
+# capacity checks at 20 C: mean 1C discharge capacity of the three CC-CV / 1 h rest / 1C cycles [A.h] (survey.py)
+LP_CAPCHECK = {"2026-10-09": 1.894, "2026-10-17": 1.934, "2026-10-18": 1.930, "2026-10-26": 1.922,
+               "2026-10-29": 1.881, "2026-11-02": 1.794}
+
+
+def lp_discharge_capacities(t, I, i_min=0.5, min_s=600.0):
+    """1C discharges of a record (I > i_min for at least min_s): (time at their end [s], charge [A.h])."""
+    on = I > i_min
+    e = np.flatnonzero(np.diff(on.astype(int)) != 0) + 1
+    te, q = [], []
+    for s in np.split(np.arange(len(I)), e):
+        if on[s[0]] and t[s[-1]] - t[s[0]] >= min_s:
+            te.append(t[s[-1]]); q.append(np.trapezoid(I[s], t[s]) / 3600)
+    return np.array(te), np.array(q)
 
 
 def lp_list_folders():
@@ -128,6 +161,8 @@ def lp_cut(key):
     keep = d["step"] >= ds.get("start_step", 0)
     if ds.get("end_step") is not None:
         keep &= d["step"] < ds["end_step"]
+    if ds.get("end_time") is not None:
+        keep &= d["t"] < ds["end_time"]
     d = {**d, **{k: d[k][keep] for k in ("t", "V", "I", "step")}}
     d["V_rest"] = V_rest
     return d
@@ -146,7 +181,9 @@ def _load_lp(test, dt=None):
     return dict(**out, T=np.full(n, ds["T"]), valid=np.ones(n, bool), T_C=float(ds["T"]),
                 dt=float(dt) if dt is not None else float(np.median(np.diff(t))), V_rest=d["V_rest"], cell=LP_CELL,
                 test=test, dataset="exp_LP604765",
-                meta=dict(folder=ds["test"], names=d["names"], dq=ds["dq"], Q_ref=LP_Q_REF, split="fit" if test in LP_FIT else "val"))
+                meta=dict(folder=ds["test"], names=d["names"], dq=ds["dq"], Q_ref=LP_Q_REF,
+                          split="fit" if test in LP_FIT else ("ageing" if test in LP_AGE else "val"),
+                          cap_1C=lp_discharge_capacities(t, d["I"])))
 
 
 # ---------------------------------------------------------------- Mohtat (real cells, processed in MIONet)
@@ -238,8 +275,9 @@ def ocv(cs, cell, q, T_K):
     return U
 
 
-def q_from_ocv(cs, cell, V, T_K, lo=-0.4, hi=0.6, n=4001):
-    """Inverse of ocv on [lo, hi] A.h by the nearest grid point (as the LP identification's Model.dq_from_ocv)."""
+def q_from_ocv(cs, cell, V, T_K, lo=-0.4, hi=2.4, n=11201):
+    """Inverse of ocv on [lo, hi] A.h by the nearest grid point, 0.25 mAh apart: the grid of the LP identification's
+    Model.dq_from_ocv ([-0.4, 0.6]) extended to the bottom of the window, for tests that start discharged."""
     q = np.linspace(lo, hi, n)
     return float(q[int(np.argmin(np.abs(ocv(cs, cell, q, T_K) - V)))])
 

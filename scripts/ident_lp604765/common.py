@@ -17,9 +17,10 @@ RES = os.path.join(ROOT, "results", "exp_LP604765")          # git-ignored, like
 CACHE = os.path.join(RES, "profiles_v2.pkl")         # v2: 1-s steps under current
 
 from lpmodel import DFNEKF as _ROOT  # noqa: E402  (puts dfnekf on the path)
-from dfnekf.datasets import LP_FIT as FIT, LP_VAL as VAL  # noqa: E402
+from dfnekf.datasets import LP_FIT as FIT, LP_VAL as VAL, LP_FIT_B as FIT_B, LP_VAL_B as VAL_B  # noqa: E402
 
-ALL = {**FIT, **VAL}
+ALL = {**FIT, **VAL, **FIT_B, **VAL_B}
+TEST_SETS = {"hppc": list(FIT), "B": list(FIT) + list(FIT_B)}     # fit sets (fit.py --tests)
 
 # parameters of the model (lpmodel.NOMINAL) plus the per-test start offsets
 from lpmodel import BOUNDS as _B, NOMINAL as _N  # noqa: E402
@@ -101,6 +102,39 @@ def _sim(args):
     except Exception as e:  # noqa: BLE001
         return None, repr(e)
     return out, None
+
+
+def _vjac(args):
+    """Exact (IFT) sensitivities of one test: V and dV/dp for the groups `names` at the full parameter set p
+    (physical values); the start charge by its rule (fixed, fitted dq_xx, or OCV inversion with IFT)."""
+    key, names, p, _ = args
+    import jax
+    import jax.numpy as jnp
+    if "m_ift" not in _W:
+        from lpmodel import Model
+        _W["m_ift"] = Model(ift=True); _W["m_ift"]._base(); _W["jac"] = {}
+    m = _W["m_ift"]; ds = ALL[key]; pr = _W["prof"][key]
+    jk = (key, tuple(names))
+    if jk not in _W["jac"]:
+        I, dt, idx = (jnp.asarray(pr[k_]) for k_ in ("I", "dt", "idx"))
+
+        def f(x, rest):
+            pp = {**rest, **dict(zip(names, list(x)))}
+            pm = {k_: v for k_, v in pp.items() if not k_.startswith("dq_")}
+            if ds["dq"] == "ocv":
+                dq = m.dq_from_ocv_jax(pm, ds["T"], pr["V_rest"])
+            else:
+                dq = jnp.asarray(0.0) if ds["dq"] == "dq_20" else pp[ds["dq"]]
+            V = m._run(m.traced_jax(pm, ds["T"], dq), I, dt, idx, False)[0]
+            return V, V
+        _W["jac"][jk] = jax.jit(jax.jacfwd(f, has_aux=True))
+    x = jnp.asarray([p[n_] for n_ in names], dtype=jnp.float64)
+    rest = {k_: jnp.asarray(v, dtype=jnp.float64) for k_, v in p.items() if k_ not in names}
+    try:
+        J, V = _W["jac"][jk](x, rest)
+        return (np.asarray(V), np.asarray(J)), None
+    except Exception as e:  # noqa: BLE001
+        return None, repr(e)
 
 
 def pool(keys, n=12):
