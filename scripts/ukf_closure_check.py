@@ -16,7 +16,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from dfnekf import cli, runtime
 
-p = cli.parser("Appendix B / Table V (UKF closure iterations)", "closure residual at the UKF sigma points and cost of full convergence")
+p = cli.parser("Appendix B / Table IV (UKF closure iterations)", "closure residual at the UKF sigma points and cost of full convergence")
 p.add_argument("--seed", type=int, default=0)
 p.add_argument("--steps", type=int, default=None, help="number of steps (default: whole protocol)")
 p.add_argument("--chunk", type=int, default=288, help="steps per scan chunk; the k-sweep is evaluated at the end of every chunk (a tail shorter than a chunk is dropped)")

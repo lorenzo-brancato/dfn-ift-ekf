@@ -1,4 +1,4 @@
-"""Pilot of the full UKF with the closure solved at every sigma point (Appendix B / Table V, remark on the non-consistency of the UKF).
+"""Pilot of the full UKF with the closure solved at every sigma point (Appendix B / Table IV, remark on the non-consistency of the UKF).
 
 The manuscript's full UKF performs ONE Newton iteration of the closure per sigma point (``--closure-iters 1``). The pilot repeats four twin runs at th2 (seeds 0, 3, 14 and 5: the three
 inconsistent runs of the 20 and one consistent run) with FOUR iterations, which brings the closure residual at the sigma points to machine precision in the median, and compares the

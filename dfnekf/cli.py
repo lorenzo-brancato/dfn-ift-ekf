@@ -10,7 +10,7 @@ import time
 
 
 def parser(item, description, seeds="0-9", states="th1,th2,th3,th4,th5"):
-    """ArgumentParser with the common options; ``item`` is the paper item the script reproduces (e.g. 'Fig. 5, Table III')."""
+    """ArgumentParser with the common options; ``item`` is the paper item the script reproduces (e.g. 'Fig. 5, Table II')."""
     p = argparse.ArgumentParser(description=f"[{item}] {description}")
     p.add_argument("--grid", default="4:1", choices=["uniform", "4:1"], help="spatial grid of the grey-box model")
     p.add_argument("--data", default="data", help="folder with the PyBaMM reference simulations")

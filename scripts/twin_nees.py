@@ -1,4 +1,4 @@
-"""Twin experiments and filter consistency (NEES): Fig. 6, Table V, Appendix D ('consistency at the fresh cell').
+"""Twin experiments and filter consistency (NEES): Fig. 6, Table IV, Appendix D ('consistency at the fresh cell').
 
 The truth is the grey-box model itself (``Case(twin=True)``, noise-free ROM voltage at the true parameters) plus 2 mV noise, so any inconsistency is due to the filter,
 not to model error. Seeds 0-19 by default. NEES of (R_f, D_s) (2 dof, logit coordinates, covariance block of the filter), averaged over the steps of each run.
@@ -23,7 +23,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from dfnekf import cli, runtime
 
-p = cli.parser("Fig. 6, Table V, Appendix D", "twin experiments: NEES consistency of the EKF and of the full UKF", seeds="0-19", states="th1,th2")
+p = cli.parser("Fig. 6, Table IV, Appendix D", "twin experiments: NEES consistency of the EKF and of the full UKF", seeds="0-19", states="th1,th2")
 p.add_argument("--filter", default="ekf", choices=["ekf", "ukf"])
 p.add_argument("--progress-chunk", type=int, default=0, help="UKF only: print the progress every N steps (0 = off). The chunked loop is compiled differently from the single scan and changes the NEES at the 1e-3 relative level, so runs meant to be compared must use the same setting")
 p.add_argument("--closure-iters", "--ukf-iters", dest="closure_iters", default="1", help="Newton iterations of the closure per sigma point (integer) or 'conv'; UKF only")
@@ -121,7 +121,7 @@ def aggregate():
     if ek2 is not None: fm += [dict(filter="EKF", seed=int(r), NEES_RfDs_mean=v) for r, v in zip(ek2.run, ek2.nees_RfDs_mean)]
     if uk is not None: fm += [dict(filter="UKF completo", seed=int(r), NEES_RfDs_mean=v) for r, v in zip(uk.run, uk.nees_RfDs_mean)]
     cli.write_csv(pd.DataFrame(fm), args, os.path.join("source_data", "fig_nees_m17.csv"), note="Fig. 6a, th2", float_format="%.6g")
-    # ---- Table V
+    # ---- Table IV
     fr = []; c_e, c_u = cost_ms("ekf"), cost_ms("ukf")
     for lab, d, ft, cst in [("EKF strutturato", ek2, "ekf", c_e), ("UKF k=1 completo (Jacobiana per sigma-point), alpha = 1", uk, ukf_key[0], c_u)]:
         if d is None: continue
@@ -129,7 +129,7 @@ def aggregate():
         fr.append(dict(filter=lab, twin_runs=t["runs"], NEES_RfDs_mean=t["NEES_RfDs_mean"], NEES_ci95=t["NEES_ci95"], NEES_median=t["NEES_median"], NEES_3dof_mean=t["NEES_3dof_mean"], twin_p90_Rf=t["p90_Rf"], twin_p90_LAM=t["p90_LAM"], twin_p90_Ds=t["p90_Ds"],
                        NEES_in_1_3=t["NEES_in_1_3"], n_runs_NEES_gt10=t["n_runs_gt10"], n_runs_NEES_gt3=t["n_runs_gt3"], pybamm_runs=0 if s is None else len(s), pybamm_p90_Rf=st.get("p90_Rf", np.nan), pybamm_p90_LAM=st.get("p90_LAM", np.nan),
                        pybamm_p90_Ds=st.get("p90_Ds", np.nan), pybamm_rmse_Rf=st.get("rmse_Rf", np.nan), pybamm_rmse_LAM=st.get("rmse_LAM", np.nan), pybamm_rmse_Ds=st.get("rmse_Ds", np.nan), cost_ms_20_10_20_Nm12_N653=cst, cost_ratio_vs_EKF_N653=cst / c_e))
-    cli.write_csv(pd.DataFrame(fr), args, os.path.join("tables", "tab_filters_m17.csv"), note="Table V; cost from tab_cost_jax_m17.csv", float_format="%.6g")
+    cli.write_csv(pd.DataFrame(fr), args, os.path.join("tables", "tab_filters_m17.csv"), note="Table IV; cost from tab_cost_jax_m17.csv", float_format="%.6g")
     # ---- Appendix D
     a = []
     def add(q, v, n="", note=""): a.append(dict(quantity=q, value=v, runs=n, note=note))

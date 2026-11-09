@@ -1,15 +1,15 @@
-"""Fig. 11 and the residual-certificate numbers of Appendix E: where the learned closure should fail.
+"""Fig. 10 and the residual-certificate numbers of Appendix E: where the learned closure should fail.
 
 Stress case outside the ageing range: three 5C pulses of 10 s followed by 120 s of rest (protocol P5, 1000 steps of 0.5 s, initial SOC 90 % plus rest), film resistance 15 times nominal,
 initial electrolyte concentration halved (500 mol/m^3), LAM = 0.3 (a_s = 0.7), D_s nominal. The true trajectory is the converged Newton solver with fallback; at every step the trained
-network gives the reaction currents, one Newton iteration follows, and the residual ||F||_inf of the closure equations after that single iteration is recorded (the quantity of Fig. 11).
+network gives the reaction currents, one Newton iteration follows, and the residual ||F||_inf of the closure equations after that single iteration is recorded (the quantity of Fig. 10).
 Where it exceeds 1e-4 the step is completed with Newton run to convergence ('completion', marks in the figure). For comparison the residual of the network alone and of the converged
 solver along the same trajectory are recorded.
 
 Outputs:
   <results>/residual_stress_series.csv        one row per step: t_s, I_A, residual_inf_norm (network + 1 Newton), fallback_active (completion), completion_newton_it, ce_min,
                                               threshold, residual_network_alone, residual_converged
-  <results>/source_data/fig_residual_m17.csv  Fig. 11 data: t_s, residual_inf_norm, fallback_active, threshold (header comments as in the original file)
+  <results>/source_data/fig_residual_m17.csv  Fig. 10 data: t_s, residual_inf_norm, fallback_active, threshold (header comments as in the original file)
   <results>/tables/residual_stress_numbers.csv numbers quoted in the text: completed fraction (31 %), maximum residual, decades above the threshold ('four orders of magnitude'),
                                               longest time above the threshold ('up to a minute'), network alone, converged solver
 The other numbers of the residual certificate of Appendix E come from the closure ablation (``scripts/closure_ablation.py --aggregate``, tables/ablation_text_numbers.csv): residual below
@@ -41,7 +41,7 @@ def runs_above(flag, dt):
 
 
 def main():
-    p = cli.parser("Fig. 11, Appendix E (residual certificate)", "residual of the learned closure after one Newton iteration in a stress case outside the ageing range")
+    p = cli.parser("Fig. 10, Appendix E (residual certificate)", "residual of the learned closure after one Newton iteration in a stress case outside the ageing range")
     p.add_argument("--net", default=None, help="trained network (default <results>/closure_4to1.pkl if present, else the weights shipped in dfnekf/assets)")
     a = p.parse_args()
     runtime.setup(a.core)
@@ -64,7 +64,7 @@ def main():
     def body(carry, I):
         z, g = carry; csn, csp, ce = m.surf(z); ce = jnp.maximum(ce, 20.0); j = net(csn, csp, ce, I, th)
         g_net, _, res_net = m.g_hat(j, csn, csp, ce, I, th)                                             # network alone
-        g1, res1 = A_.newton_fixed(g_net, csn, csp, ce, I, th, k=1)                                     # network + one Newton iteration (the quantity of Fig. 11)
+        g1, res1 = A_.newton_fixed(g_net, csn, csp, ce, I, th, k=1)                                     # network + one Newton iteration (the quantity of Fig. 10)
         gc, resc, _ = A_.solve_robust(g, csn, csp, ce, I, th, tol=1e-10)                                # converged solver with fallback: the true trajectory
         need = res1 > THRESHOLD
         kc = jax.lax.cond(need, lambda g_: A_.newton(g_, csn, csp, ce, I, th, tol=1e-10)[2], lambda g_: jnp.asarray(0), g1)
@@ -80,7 +80,7 @@ def main():
     lens, starts = runs_above(res1 > THRESHOLD, DT)
     jump = np.log10(np.maximum(res1[1:], 1e-16) / np.maximum(res1[:-1], 1e-16))
     nums = [("steps", len(res1), ""), ("completed steps (residual > 1e-4)", int(need.sum()), ""),
-            ("fraction of completed steps", float(need.mean()), "31 % of the total (Fig. 11 marks)"),
+            ("fraction of completed steps", float(need.mean()), "31 % of the total (Fig. 10 marks)"),
             ("residual after one iteration: median", float(np.median(res1)), ""), ("residual after one iteration: 99th percentile", float(np.quantile(res1, .99)), ""),
             ("residual after one iteration: maximum", float(res1.max()), ""),
             ("maximum residual in decades above the threshold", float(np.log10(res1.max() / THRESHOLD)), "jumps above the threshold by up to four orders of magnitude"),
@@ -92,7 +92,7 @@ def main():
             ("residual of the network alone: median", float(np.median(res_net)), ""),
             ("residual of the converged solver: maximum", float(res_conv.max()), "below 1e-10 with the converged solver"), ("minimum c_e (mol/m3)", float(cemin.min()), "")]
     N = pd.DataFrame(nums, columns=["quantity", "value", "first_version_text"]); os.makedirs(os.path.join(a.results, "tables"), exist_ok=True)
-    cli.write_csv(N, a, "tables/residual_stress_numbers.csv", note="numbers of the residual certificate in the stress case (Fig. 11)", float_format="%.6g")
+    cli.write_csv(N, a, "tables/residual_stress_numbers.csv", note="numbers of the residual certificate in the stress case (Fig. 10)", float_format="%.6g")
     print(N.to_string(index=False)); clock.log()
 
 

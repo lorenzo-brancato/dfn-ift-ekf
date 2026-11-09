@@ -1,10 +1,10 @@
-"""Appendix E, Table VIII: ablation of the learned closure inside the filter.
+"""Appendix E, Table VII: ablation of the learned closure inside the filter.
 
 Question: does a trained network help the guarded EKF? Closures compared (state th2, estimation protocol P6Lx2 followed by the discharge pulses = protocol F6, 10620 steps, 4:1 grid,
 R_f, LAM_n, D_s estimated with LLI fixed, guard on, ten noise sequences: measurement noise ``default_rng(seed)`` x 2 mV, initial offsets ``default_rng(200 + seed)``):
   net0   the network alone (no Newton iteration, no completion)
   net1   network + one Newton iteration; the converged solution is computed only for the linearization when the residual exceeds 1e-4 ('completion of the linearization')
-  net1c  network + one Newton iteration + completion (voltage, state advance and linearization) when the residual exceeds 1e-4: the 'network + 1 Newton' row of Table VIII
+  net1c  network + one Newton iteration + completion (voltage, state advance and linearization) when the residual exceeds 1e-4: the 'network + 1 Newton' row of Table VII
   warm   converged Newton, warm start from the previous step with fallback to a cold start (the closure used for all results of the paper)
   cold   converged Newton from a fixed cold guess
 The network is the one trained by ``scripts/train_closure.py`` (``--net``; default: ``<results>/closure_4to1.pkl`` if it exists, otherwise the weights shipped in ``dfnekf/assets``).
@@ -14,7 +14,7 @@ Four kinds of jobs:
   --openloop                open-loop checks without filter, true parameters: voltage difference of net0/net1/net1c from warm on a 3C pulse of the nominal cell at 100 % SOC
                             (ablation_openloop3C.csv) and Newton iterations along F6 at th2 (ablation_iters.csv: iterations of cold/warm/fallback, completion fraction of the network)
   --cost                    cost of one filter step per closure (median over 3600 calls, one thread); MUST BE RUN ON AN IDLE MACHINE, one core (--core), nothing else running (ablation_cost.csv)
-  --aggregate               Table VIII from the per-run files: tables/tab_ablation_m17.csv (one row per closure: means over the seeds), tables/ablation_runs.csv (one row per run, with the
+  --aggregate               Table VII from the per-run files: tables/tab_ablation_m17.csv (one row per closure: means over the seeds), tables/ablation_runs.csv (one row per run, with the
                             voltage difference from warm), tables/ablation_text_numbers.csv (numbers quoted in Appendix E)
 
 Commands (a filter run is about 575 s CPU on the machine of the paper, 10620 steps; the 50 runs are 8 h CPU; jobs are independent):
@@ -231,19 +231,19 @@ def aggregate(args):
                       ms_per_step_median=kk.median_ms.iloc[0] if kk is not None and len(kk) else np.nan, ms_per_step_p99=kk.p99_ms.iloc[0] if kk is not None and len(kk) else np.nan,
                       n_rejected_total=int(g.n_rejected.sum()), n_finite=int(g.finite_all.sum()), **e))
     T = pd.DataFrame(T)
-    cli.write_csv(T, args, "tables/tab_ablation_m17.csv", note="Table VIII: one row per closure, mean over the seeds (errors: estimate minus truth, % of the ageing range, signed, at t = 4320 s and at the end). " + NOTE_TAIL, float_format="%.6g")
+    cli.write_csv(T, args, "tables/tab_ablation_m17.csv", note="Table VII: one row per closure, mean over the seeds (errors: estimate minus truth, % of the ageing range, signed, at t = 4320 s and at the end). " + NOTE_TAIL, float_format="%.6g")
     print(T.round(3).T.to_string())
     # numbers quoted in Appendix E
     def mean(cl, col): g = D[D.closure == cl]; return float(g[col].mean()) if len(g) else np.nan
     def mx(cl, col): g = D[D.closure == cl]; return float(g[col].max()) if len(g) else np.nan
     tn = []
     def add(name, value, text): tn.append(dict(quantity=name, value=value, first_version_text=text))
-    add("dV_rms_net0_vs_warm_mV (mean over seeds)", mean("net0", "dV_rms_vs_warm_mV"), "0.53 mV (Step 1, Table VIII)")
-    add("dV_rms_net1c_vs_warm_mV", mean("net1c", "dV_rms_vs_warm_mV"), "0.004 mV (Step 2, Table VIII)")
+    add("dV_rms_net0_vs_warm_mV (mean over seeds)", mean("net0", "dV_rms_vs_warm_mV"), "0.53 mV (Step 1, Table VII)")
+    add("dV_rms_net1c_vs_warm_mV", mean("net1c", "dV_rms_vs_warm_mV"), "0.004 mV (Step 2, Table VII)")
     add("dV_rms_net1_vs_warm_mV", mean("net1", "dV_rms_vs_warm_mV"), "row 'net1' (completion of the linearization only)")
     add("completion fraction net1c (steps with residual > 1e-4 after one iteration)", mean("net1c", "frac_res_gt_1em4"), "11.3 %")
     add("completion fraction net1", mean("net1", "frac_res_gt_1em4"), "11.3 % (same decision as net1c)")
-    add("fallback fraction warm (Newton from the warm start failed, cold restart)", mean("warm", "frac_fallback_warm"), "0.11 % (Table VIII, dagger)")
+    add("fallback fraction warm (Newton from the warm start failed, cold restart)", mean("warm", "frac_fallback_warm"), "0.11 % (Table VII, dagger)")
     add("resF_max warm, max over seeds", mx("warm", "resF_max"), "residual below 1e-10 with the converged solver")
     add("resF_max cold, max over seeds", mx("cold", "resF_max"), "residual below 1e-10 with the converged solver")
     add("resF_p99 after one iteration from the network (net1, mean over seeds)", mean("net1", "resF_p99"), "99th percentile 3e-3")
@@ -251,30 +251,30 @@ def aggregate(args):
     for p in ["Rf", "LAM", "Ds"]:
         for cl in ["net0", "net1", "net1c"]:
             add(f"final error {p}, {cl} minus warm (% of range, mean over seeds)", mean(cl, f"{p}_err_end_pct") - mean("warm", f"{p}_err_end_pct"), "network alone: shift of about 1 % each; net1c: less than 0.02 %" if cl != "net1" else "")
-        add(f"final error {p}, warm (% of range, mean over seeds)", mean("warm", f"{p}_err_end_pct"), "-1.4, -0.1, -0.4 with the converged solver (Table VIII)")
+        add(f"final error {p}, warm (% of range, mean over seeds)", mean("warm", f"{p}_err_end_pct"), "-1.4, -0.1, -0.4 with the converged solver (Table VII)")
     if K is not None and len(K):
         ms = {c: float(K[K.closure == c].median_ms.iloc[0]) for c in K.closure}
         if "net0" in ms and "warm" in ms: add("step cost net0 relative to warm (%)", 100 * (ms["net0"] / ms["warm"] - 1), "the network alone saves 5 %")
         if "net1c" in ms and "warm" in ms: add("step cost net1c relative to warm (%)", 100 * (ms["net1c"] / ms["warm"] - 1), "+3 % (7.61 vs 7.42 ms)")
-        for c, v in ms.items(): add(f"step cost {c} (ms, median)", v, "Table VIII, column Step")
+        for c, v in ms.items(): add(f"step cost {c} (ms, median)", v, "Table VII, column Step")
     add("guard rejections, all runs and closures", int(D.n_rejected.sum()), "the guard never rejected an update on the protocols of the paper")
     add("max anode surface concentration / c_max,n of the warm runs (F6 at th2)", mx("warm", "csn_max_frac_of_cmax"), "anode surface below 77 % of the maximum comes from the F6Q static tests (scripts/charge.py, tables/charge_validity.csv)")
     ol = os.path.join(res, "ablation_openloop3C.csv")
     if os.path.exists(ol):
-        O = pd.read_csv(ol, comment="#"); add("open loop 3C pulse, dV_rms net0 vs warm (mV)", float(O[O.closure == "net0"].dV_rms_vs_warm_mV.iloc[0]), "1.5 mV on a 3C pulse in open loop (Table VIII, footnote)")
+        O = pd.read_csv(ol, comment="#"); add("open loop 3C pulse, dV_rms net0 vs warm (mV)", float(O[O.closure == "net0"].dV_rms_vs_warm_mV.iloc[0]), "1.5 mV on a 3C pulse in open loop (Table VII, footnote)")
     if IT is not None and "frac_completed" in IT: add("open loop F6, completion fraction", float(IT.frac_completed.dropna().iloc[0]), "11 % of the steps along the true trajectory")
-    cli.write_csv(pd.DataFrame(tn), args, "tables/ablation_text_numbers.csv", note="numbers quoted in Appendix E (Table VIII text). " + NOTE_TAIL, float_format="%.6g")
+    cli.write_csv(pd.DataFrame(tn), args, "tables/ablation_text_numbers.csv", note="numbers quoted in Appendix E (Table VII text). " + NOTE_TAIL, float_format="%.6g")
 
 
 def main():
-    p = cli.parser("Appendix E, Table VIII (learned-closure ablation)", "filter runs with five closures on F6 at th2, open-loop checks, step cost and the table", seeds="0-9", states="th2")
+    p = cli.parser("Appendix E, Table VII (learned-closure ablation)", "filter runs with five closures on F6 at th2, open-loop checks, step cost and the table", seeds="0-9", states="th2")
     p.add_argument("--closures", default=",".join(CLOSURES), help="comma-separated subset of " + ", ".join(CLOSURES))
     p.add_argument("--net", default=None, help="trained network (default <results>/closure_4to1.pkl if present, else the weights shipped in dfnekf/assets)")
     p.add_argument("--resume", action="store_true", help="skip runs whose trajectory file exists")
     p.add_argument("--openloop", action="store_true", help="open-loop checks and Newton iteration statistics instead of filter runs")
     p.add_argument("--cost", action="store_true", help="step-cost measurement (idle machine, one core)")
     p.add_argument("--n-calls", type=int, default=3600, help="calls per closure in --cost")
-    p.add_argument("--aggregate", action="store_true", help="build Table VIII from the per-run files (no simulation)")
+    p.add_argument("--aggregate", action="store_true", help="build Table VII from the per-run files (no simulation)")
     a = p.parse_args()
     if a.aggregate: return aggregate(a)
     if a.openloop: return openloop(a)

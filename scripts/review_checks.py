@@ -1,4 +1,4 @@
-"""Checks added after the external review of the manuscript.
+"""Additional checks of Appendix D and Sec. III-D (open-loop SPMe, SEI current, change of the estimates in the CV).
 
 Paper items: (spme) Appendix D, "SPMe in open loop with the true parameters": phi_pl error and 0 mV crossings of the SPMe without any estimation (3.7-20.7 mV RMS in the 2C pulses,
 same missed / early / false crossings as the SPMe filter: the error is structural) and the parameter errors of both filters at the end of the P6L blocks;
@@ -8,7 +8,7 @@ explains about 13 % of the 0.77 mV overestimate in the CV of RPT 3-6; (freeze) S
 Parts (--parts, default spme,sei):
   spme    SPMe OPEN LOOP with the TRUE parameters on the charge protocol F6Q (F6Q3 for th3), the five states, started from the true initial state at t = 0 (so it also runs
           through the two P6L blocks). phi_pl error against the PyBaMM reference at the anode/separator face, as in ``scripts/charge.py`` (same ``dfnekf.metrics``):
-          RMS over each 2C pulse, and the +0/+10/+20 mV crossings of the 1C constant-current charge. Printed next to the SPMe-UKF filter (Tables III-IV, read from
+          RMS over each 2C pulse, and the +0/+10/+20 mV crossings of the 1C constant-current charge. Printed next to the SPMe-UKF filter (Tables II-III, read from
           <ref-results>/tables). Also the parameter errors of the SPMe filter and of the grey-box EKF at the end of the two P6L blocks (8640 steps), from the stored
           charge trajectories (<ref-results>/traj/charge_th*_s*.npz).  Output: review_spme_open_loop.csv, review_spme_cc.csv, review_p6l_end_errors.csv.
   sei     Constant-voltage hold of RPT 3-6 of the ageing reference: how much of the model overestimate (Fig. 8f, 0.77 mV) the lithium-consuming SEI reaction explains.
@@ -85,7 +85,7 @@ def spme_part(a):
     cli.write_csv(R, a, "review_spme_open_loop.csv", note="SPMe open loop, true parameters, 2C pulses of F6Q: phi_pl and eta errors against the reference (mV), c_e,min error (%)")
     cli.write_csv(C, a, "review_spme_cc.csv", note="SPMe open loop, true parameters, 1C CC charge of F6Q: phi_pl RMS error and threshold crossings (delay + late, - early; false alarm = SPMe crosses, reference never does)")
     if len(T): cli.write_csv(T, a, "review_p6l_end_errors.csv", note="parameter errors (% of range, signed) at the end of the two P6L blocks (step 8640) in the stored charge runs")
-    # comparison with the filters of Tables III-IV
+    # comparison with the filters of Tables II-III
     tab = os.path.join(a.ref_results, "tables")
     try:
         S = pd.read_csv(os.path.join(tab, "charge_summary.csv"), comment="#"); K = pd.read_csv(os.path.join(tab, "tab_cc_m17.csv"), comment="#")

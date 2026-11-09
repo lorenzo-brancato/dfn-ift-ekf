@@ -1,4 +1,4 @@
-"""Static-protocol Monte Carlo of the EKF (and of the full UKF) against PyBaMM: Fig. 5, Sec. III-B, RMSE columns of Table V.
+"""Static-protocol Monte Carlo of the EKF (and of the full UKF) against PyBaMM: Fig. 5, Sec. III-B, RMSE columns of Table IV.
 
 Five ageing states (th1..th5) x seeds 0-9. Truth = PyBaMM P6Lx2 reference (40/20/40 mesh, dt 0.5 s, 4320 s); measurement noise default_rng(seed) with sigma_V = 2 mV;
 initial offsets default_rng(200 + seed), +-40 % of the parameter range; EKF on (R_f, LAM, D_s) in logit coordinates, LLI fixed through the initial state.
@@ -19,7 +19,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from dfnekf import cli, runtime
 
-p = cli.parser("Fig. 5, Sec. III-B, Table V (RMSE)", "static-protocol Monte Carlo of the EKF / UKF against PyBaMM", seeds="0-9")
+p = cli.parser("Fig. 5, Sec. III-B, Table IV (RMSE)", "static-protocol Monte Carlo of the EKF / UKF against PyBaMM", seeds="0-9")
 p.add_argument("--filter", default="ekf", choices=["ekf", "ukf"])
 p.add_argument("--progress-chunk", type=int, default=0, help="UKF only: print the progress every N steps (0 = off). The chunked loop is compiled differently from the single scan and changes the NEES at the 1e-3 relative level, so runs meant to be compared must use the same setting")
 p.add_argument("--closure-iters", "--ukf-iters", dest="closure_iters", default="1", help="Newton iterations of the closure per sigma point (integer) or 'conv'; UKF only")

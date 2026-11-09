@@ -1,4 +1,4 @@
-"""Discharge experiments: grey-box DFN-EKF with state guard versus the SPMe unscented filter on the 3C discharge pulse (Fig. 10, Table VII, Appendix D discharge numbers).
+"""Discharge experiments: grey-box DFN-EKF with state guard versus the SPMe unscented filter on the 3C discharge pulse (Table VI, Appendix D discharge numbers; the 3C traces of the former Fig. 10 are no longer in the paper, the data are still written).
 
 Protocols: F6 for state th2 (the last 3C discharge pulse of 30 s never reaches the 2.5 V cutoff) and F6C for th4 and th5 (the reference reaches 2.5 V during the last 3C pulse
 and the current is cut: after 17.5 s for th4, 4 s for th5). Window '3C' = from the onset of the last 3C pulse (I = 15 A) to the cutoff / end of the pulse; a 90 s rest window
@@ -13,8 +13,8 @@ Aggregate (reads the per-run files of --results; writes <results>/tables and <re
     python scripts/discharge.py --aggregate --grid 4:1 --data data --results results
 Per-run outputs: <results>/traj/discharge_<protocol>_<state>_s<seed>.npz (all filter histories, spme_*), <results>/discharge_<protocol>_<state>_s<seed>.csv (errors per window and filter),
 <results>/discharge_info_<protocol>_<state>_s<seed>.csv (window times, guard certificate, final parameter errors, minimum reference phi_pl in the 3C window, CPU).
-Aggregate outputs: tables/tab_baselines_m17.csv (Table VII), tables/discharge_runs.csv, tables/discharge_summary.csv, tables/discharge_text_numbers.csv (phi_pl RMS ranges, margins,
-pulse durations, minimum reference phi_pl), source_data/fig_eta3C.csv (Fig. 10, seed 0).
+Aggregate outputs: tables/tab_baselines_m17.csv (Table VI), tables/discharge_runs.csv, tables/discharge_summary.csv, tables/discharge_text_numbers.csv (phi_pl RMS ranges, margins,
+pulse durations, minimum reference phi_pl), source_data/fig_eta3C.csv (3C traces, seed 0; figure no longer in the paper).
 """
 import os
 import sys
@@ -123,7 +123,7 @@ def aggregate(args):
         out.append(r)
     O = pd.DataFrame(out); cli.write_csv(O, args, "tables/discharge_summary.csv", note="3C window: median, min and max over seeds. " + NOTE_TAIL, float_format="%.6g")
 
-    # ---- Table VII
+    # ---- Table VI
     Bl = []
     for tg, g in D.groupby("theta"):
         eg, es = g.E_eta_rms_mV_EKF.median(), g.E_eta_rms_mV_SPMe.median(); n = len(g)
@@ -132,7 +132,7 @@ def aggregate(args):
                        theta_err_Ds_median_pct=g.Ds_err_end_pct.median(), pulse_duration_s=g.pulse_duration_s.median()))
         Bl.append(dict(theta=tg, protocol=g.protocol.iloc[0], filter="UKF-SPMe", runs=n, seeds=",".join(str(int(x)) for x in sorted(g.seed)), E_eta_3C_median_mV=es, E_eta_3C_max_over_seeds_mV=g.E_eta_rms_mV_SPMe.max(),
                        margin_E_eta=es / eg, ce_min_3C_err_median_pct=g.ce_min_relerr_max_pct_SPMe.median(), pulse_duration_s=g.pulse_duration_s.median()))
-    cli.write_csv(pd.DataFrame(Bl), args, "tables/tab_baselines_m17.csv", note="Table VII: 3C discharge pulse (th4, th5: F6C, truncated at the 2.5 V cutoff; th2: F6, the 3C does not reach the cutoff); medians over seeds; "
+    cli.write_csv(pd.DataFrame(Bl), args, "tables/tab_baselines_m17.csv", note="Table VI: 3C discharge pulse (th4, th5: F6C, truncated at the 2.5 V cutoff; th2: F6, the 3C does not reach the cutoff); medians over seeds; "
                   "margin = ratio of the medians of E_eta (SPMe / grey-box); the cost columns of the full table come from the timing script. " + NOTE_TAIL, float_format="%.6g")
 
     # ---- numbers quoted in the text
@@ -155,7 +155,7 @@ def aggregate(args):
     add("phipl_ref_stays_above_0p4V", "all", "bool", float(lo > 0.4), "1 if the reference phi_pl stays above 0.4 V in the 3C window of every state")
     cli.write_csv(pd.DataFrame(tn), args, "tables/discharge_text_numbers.csv", note="numbers quoted in the text of Sec. III-C (discharge) and Appendix D. " + NOTE_TAIL, float_format="%.6g")
 
-    # ---- Fig. 10 source data (seed 0)
+    # ---- source data of the 3C traces (seed 0; figure no longer in the paper, kept for figures/fig_discharge.tex)
     P0 = params.base(); parts = []; cm = []
     for tg in states:
         proto = PROTO[tg]; f0 = os.path.join(args.results, "traj", f"discharge_{proto}_{tg}_s0.npz")
@@ -169,13 +169,13 @@ def aggregate(args):
                                        eta_UKF_SPMe_mV=1e3 * d["spme_eta"][idx], phi_pl_reference_mV=1e3 * ref[:, 1], phi_pl_EKF_mV=1e3 * d["ppl"][idx], phi_pl_UKF_SPMe_mV=1e3 * d["spme_ppl"][idx])))
         cm.append(f"{tg}: reference {proto}" + (" (3C of 30 s, never reaches the 2.5 V cutoff)" if proto == "F6" else " (3C terminated at the 2.5 V cutoff)") + f", cutoff / end of pulse at t = {tc:.1f} s after the onset")
     if parts:
-        cli.write_csv(pd.concat(parts), args, "source_data/fig_eta3C.csv", note="Fig. 10 (a, c, e: eta_lit; b, d, f: phi_pl): seed 0, EKF with state guard (voltage only) and SPMe UKF against the PyBaMM reference; "
+        cli.write_csv(pd.concat(parts), args, "source_data/fig_eta3C.csv", note="3C traces, not in the paper any more (a, c, e: eta_lit; b, d, f: phi_pl): seed 0, EKF with state guard (voltage only) and SPMe UKF against the PyBaMM reference; "
                       + "; ".join(cm) + "; current_A = mean over the 0.5 s step (on F6C the off-grid cutoff event is rounded to the nearest grid time). " + NOTE_TAIL, float_format="%.9g")
     print("aggregate written to", args.results)
 
 
 def main():
-    p = cli.parser("Fig. 10, Table VII, Appendix D (discharge)", "grey-box EKF with state guard versus SPMe UKF on the 3C discharge pulse", states="th2,th4,th5")
+    p = cli.parser("Table VI, Appendix D (discharge)", "grey-box EKF with state guard versus SPMe UKF on the 3C discharge pulse", states="th2,th4,th5")
     p.add_argument("--aggregate", action="store_true", help="build the tables and source data from the per-run files in --results (no simulation)")
     p.add_argument("--resume", action="store_true", help="skip runs whose trajectory file already exists")
     args = p.parse_args()

@@ -5,8 +5,8 @@ projected onto the grid cells, perturbed, and labelled with the converged Newton
 80000 iterations of batch 512, seed 0; validation split of 20 % of the base states (``default_rng(1)``), so that a state and its perturbed variants never straddle the split.
 Seeds, split and hyper-parameters are those of the first version of the network; only the list of source references changed.
 
-EVALUATION PROTOCOLS ARE NOT USED FOR TRAINING. No reference of the evaluation protocols F6, F6C, F6Q, F6Q3 (any state) and the open-loop check protocol P1_3C (any state) and no reference at th2 (the state of the ablation, Table VIII,
-and of Fig. 11) enters the training set; the script refuses to run if the list violates this (``check_refs``). The first version of the network drew 35 references selected by file
+EVALUATION PROTOCOLS ARE NOT USED FOR TRAINING. No reference of the evaluation protocols F6, F6C, F6Q, F6Q3 (any state) and the open-loop check protocol P1_3C (any state) and no reference at th2 (the state of the ablation, Table VII,
+and of Fig. 10) enters the training set; the script refuses to run if the list violates this (``check_refs``). The first version of the network drew 35 references selected by file
 date, which included the F6 reference at th2. The exact list used is printed and written to ``<results>/closure_training_refs.csv``.
 
 Outputs (``<results>`` = --results; with --quick everything goes to ``<results>/quick``):
@@ -41,9 +41,9 @@ TRAINING_REFS = [
     "P6Lx2_age", "P6Lx2_nom", "P6Lx2_th1", "P6Lx2_th3", "P6Lx2_th4", "P6Lx2_th5",
 ]
 # First version: the 35 references listed here minus the ones removed by the project decision (names kept for the audit trail).
-REMOVED_REFS = {"P1_3C_age": "protocol P1_3C (open-loop check of Appendix E)", "P1_3C_bDs": "protocol P1_3C", "P1_3C_bLAM": "protocol P1_3C", "P1_3C_bLLI": "protocol P1_3C", "P1_3C_bRf": "protocol P1_3C", "P1_3C_nom": "protocol P1_3C", "P1_3C_nomVT": "protocol P1_3C", "F6_th2": "evaluation protocol F6 and state th2", "F6_th4": "evaluation protocol F6", "F6_th5": "evaluation protocol F6", "P6Lx2_th2": "state th2 (Table VIII, Fig. 11)"}
+REMOVED_REFS = {"P1_3C_age": "protocol P1_3C (open-loop check of Appendix E)", "P1_3C_bDs": "protocol P1_3C", "P1_3C_bLAM": "protocol P1_3C", "P1_3C_bLLI": "protocol P1_3C", "P1_3C_bRf": "protocol P1_3C", "P1_3C_nom": "protocol P1_3C", "P1_3C_nomVT": "protocol P1_3C", "F6_th2": "evaluation protocol F6 and state th2", "F6_th4": "evaluation protocol F6", "F6_th5": "evaluation protocol F6", "P6Lx2_th2": "state th2 (Table VII, Fig. 10)"}
 EVAL_PROTOCOLS = ("F6", "F6C", "F6Q", "F6Q3", "P1_3C")                         # evaluation protocols, excluded for every state
-EVAL_STATE = "th2"                                                      # state of Table VIII / Fig. 11, excluded for every protocol
+EVAL_STATE = "th2"                                                      # state of Table VII / Fig. 10, excluded for every protocol
 QUICK_REFS = ["P6Lx2_th1", "P2_nom", "P6L_nom", "P1_1C_nom"]
 
 N_SAMPLES, N_ITERS, LOG_EVERY = 80000, 80000, 5000

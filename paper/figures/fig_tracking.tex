@@ -14,7 +14,7 @@
 \begin{tikzpicture}
 % ---------------- row 1: the four estimates ----------------
 \begin{groupplot}[paper, trk, group style={group size=4 by 1, horizontal sep=14mm, group name=g},
-  width=29.5mm, height=25mm]
+  width=29.5mm, height=22mm]
 \nextgroupplot[ymin=0, ymax=13, ytick={0,4,8,12}, ylabel={multiplier},
   legend to name=legtrk, legend columns=3, legend style={/tikz/every even column/.append style={column sep=4mm}}]
 \trkp{Rf}{Rf}{Rf}{0}{13}
@@ -33,7 +33,7 @@
 \coordinate (r2) at ($(g c1r1.south west)+(0,-17mm)$);
 \begin{scope}[shift={(r2)}]
 \begin{groupplot}[paper, group style={group size=2 by 1, horizontal sep=14mm, group name=h},
-  width=73mm, height=25mm, xmin=0.4, xmax=10.6, xtick={1,...,10}, xlabel={RPT}, /pgf/bar width=3pt]
+  width=73mm, height=22mm, xmin=0.4, xmax=10.6, xtick={1,...,10}, xlabel={RPT}, /pgf/bar width=3pt]
 \nextgroupplot[anchor=north west,
   ymin=-2, ymax=13, ytick={0,4,8,12}, ylabel={$R_{\mathrm{f}}$ error (\% of range)},
   legend style={at={(0.02,0.98)}, anchor=north west, fill=white}, legend columns=1]

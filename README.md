@@ -53,19 +53,19 @@ Times are wall-clock seconds (or hours) of one job on the machine below, one thr
 | Tab. I, Fig. 3; 8 against 12 modes, Sec. II-D | `grid_study.py` (`model`; `--rows modes` for the last) | 5 | 2.6–8.5 min | 0.3 h |
 | Bias of the batch fit, Fig. 5 | `bias.py` (`model`) | 5 | 2.2–5.0 min | 0.2 h |
 | CRLB, Fig. 5 | `crlb.py` (`model`) | 1 | 4.1 min | 0.04 h |
-| Static Monte Carlo, Fig. 5, Tab. V | `static_mc.py` (`static`) | 5 | 35–43 min | 4.9 h |
-| NEES, Fig. 6, Tab. V, App. D | `twin_nees.py` (`twin`) | 10 | 36–51 min | 10.1 h |
-| Charge, Fig. 7, Tab. III, IV, VI | `charge.py` (`protocols`) | 10 | 40–55 min | 10.6 h |
-| Discharge, Fig. 10, Tab. VII | `discharge.py` (`protocols`) | 6 | 31–47 min | 5.1 h |
-| Learned closure, Fig. 11, Tab. VIII | `train_closure.py`, `closure_ablation.py`, `residual_stress.py` (`closure_train`, `closure`) | 15 | 16 min (training), 4–38 min (runs), 1 min (stress) | 8.6 h |
+| Static Monte Carlo, Fig. 5, Tab. IV | `static_mc.py` (`static`) | 5 | 35–43 min | 4.9 h |
+| NEES, Fig. 6, Tab. IV, App. D | `twin_nees.py` (`twin`) | 10 | 36–51 min | 10.1 h |
+| Charge, Fig. 7, Tab. II, III, V | `charge.py` (`protocols`) | 10 | 40–55 min | 10.6 h |
+| Discharge, Tab. VI, App. D (the 3C traces of the former Fig. 10 are no longer in the paper; `fig_discharge.tex` and its data are kept, unused) | `discharge.py` (`protocols`) | 6 | 31–47 min | 5.1 h |
+| Learned closure, Fig. 10, Tab. VII | `train_closure.py`, `closure_ablation.py`, `residual_stress.py` (`closure_train`, `closure`) | 15 | 16 min (training), 4–38 min (runs), 1 min (stress) | 8.6 h |
 | Ageing tracking, Fig. 8, Sec. III-D | `ageing_track.py` (`ageing`) | 2 | 15.7 h each, in parallel | 57.2 h |
 | CV model error, Fig. 8f | `cv_model_error.py` (`aggregate`) | 2 | under 1 min | ≈ 0 |
-| SPMe open loop, App. D; SEI current, Sec. III-D (review) | `review_checks.py --parts spme,sei` | 1 | sei ≈ 30 min; spme not timed separately | ≈ 0.6 h |
-| CV freeze by protocol phase, Sec. III-D (review): control, P1, P2 | `ageing_track.py --freeze phase [--cv-update none]` (control: no flag), then `freeze_cv.py` | 5 | 20.7 h (control), 21.4–21.7 h (P1), 21.6–21.8 h (P2), five at once | 107 h |
+| SPMe open loop, App. D; SEI current, Sec. III-D | `review_checks.py --parts spme,sei` | 1 | sei ≈ 30 min; spme not timed separately | ≈ 0.6 h |
+| CV freeze by protocol phase, Appendix C, Sec. III-D: control, P1, P2 | `ageing_track.py --freeze phase [--cv-update none]` (control: no flag), then `freeze_cv.py` | 5 | 20.7 h (control), 21.4–21.7 h (P1), 21.6–21.8 h (P2), five at once | 107 h |
 | Ablation: state guard (120 h) | `ablation_guard.py --guarded-from results/4to1` | 1 | 5.1 h | ≈ 7 h |
 | Ablation: slow RPT | `ablation_slow_rpt.py` | 1 | 10.8 h | 20.2 h |
-| Costs, Fig. 4, Tab. I, V, VIII | `cost.py` (two grids), `jacobian_check.py --parts cost,step`, `closure_ablation.py --cost` (`timing`) | 4 | 13 min, 13 min, 2.5 min, 4 min | 1.5 h |
-| UKF, Fig. 6, Tab. V (k = 1) | `twin_nees.py --filter ukf`, `static_mc.py --filter ukf` (`ukf`) | 30 | 100–102 min with 5 processes at once (3040 s with 2 in the earlier campaign) | 78.1 h |
+| Costs, Fig. 4, Tab. I, IV, VII | `cost.py` (two grids), `jacobian_check.py --parts cost,step`, `closure_ablation.py --cost` (`timing`) | 4 | 13 min, 13 min, 2.5 min, 4 min | 1.5 h |
+| UKF, Fig. 6, Tab. IV (k = 1) | `twin_nees.py --filter ukf`, `static_mc.py --filter ukf` (`ukf`) | 30 | 100–102 min with 5 processes at once (3040 s with 2 in the earlier campaign) | 78.1 h |
 | UKF pilot, k = 4 (4 sigma-point Newton iterations) | `ukf_pilot.py` (`ukf_pilot`) | 4 | 8.7 h | 34.8 h |
 
 Total of this reproduction: about 243 CPU hours, including the 30 UKF runs (78.1 h), a 12 h guard run, the first (pinned, discarded) timing run and the UKF pilot (34.8 h); at most six processes at a time. The UKF stage reproduces the paper: NEES 11.21 ± 11.19 over 20 twin runs, five above 10, RMSE 0.81/0.30/0.94 % on the ten PyBaMM runs.
@@ -77,11 +77,12 @@ Two scripts support the pilot of Appendix B (why the full UKF solves the closure
 - `scripts/ukf_closure_check.py`: residual of the closure at the 2N+1 sigma points of the UKF run with one iteration, and the residual and cost of 1 to 6 iterations and of Newton to convergence at the same points.
 - `scripts/ukf_pilot.py` (stage `ukf_pilot`): four UKF runs at th2 with four iterations per sigma point against the one-iteration runs; it is a result of its own (see `release/VERIFY_M18.md`).
 
-### Added after the external review (not stages of `run_all.py`)
+### Further checks and the CV freeze (not stages of `run_all.py`)
 
 - `scripts/review_checks.py` (`--parts spme,sei`; `--parts freeze` reads a run of `ageing_track.py`): Appendix D, the SPMe in open loop with the true parameters on the charge protocol (phi_pl error and 0 mV crossings without any estimation, parameter errors of both filters at the end of the P6L blocks); Sec. III-D, the lithium-consuming SEI side-reaction current added to the open-loop model removes 13 % of the model error in the CV hold of RPT 3-6. `--quick` runs a short version of each part.
 - `scripts/ageing_track.py --freeze {none,voltage,phase}` (default `none`, the paper's run, bit for bit): the CV freeze of Sec. III-D. `voltage` zeroes the parameter rows of the Kalman gain where the *measured* voltage is at least `--freeze-above` (4.195 V) in charge, the first remedy tried; `phase` does so during the constant-voltage segment of every RPT, taken from the protocol schedule as a BMS knows its charger state; `--cv-update none` removes the measurement update in that segment altogether (prediction only). `--cv-scope all` extends `phase` to the CV of the ageing cycles. Outputs carry the suffixes `_freeze-voltage`, `_freeze-phase`, `_freeze-phase-noupdate`.
-- `scripts/freeze_cv.py`: evaluates those runs (criteria at the read-outs before the CV, at its end and at the end of the RPT, hour up to which all estimates pass, change of the estimates during and after the CV) and writes `trk_rf_<variant>.csv` in the format of `paper/figures/data/trk_rf.csv`. Results and discussion: `release/FREEZE_CV.md`.
+- `scripts/freeze_cv.py`: evaluates those runs (criteria at the read-outs before the CV, at its end and at the end of the RPT, hour up to which all estimates pass, change of the estimates during and after the CV) and writes `trk_rf_<variant>.csv` in the format of `paper/figures/data/trk_rf.csv`. Results and discussion: Appendix C of the paper.
+  The three variants of the freeze experiment: *control* (`--freeze none`, the paper's run); *P1* (`--freeze phase`: in the CV segment of every RPT the parameter rows of the gain are zero, the cell state is still updated and the parameter covariance is not reduced); *P2* (`--freeze phase --cv-update none`: no measurement update in that segment, prediction only for state and covariance). The freeze follows the protocol phase, never the measured voltage. Each run takes about 21 h on one core.
 
 ### Timing the filter
 

@@ -1,4 +1,4 @@
-"""CV freeze of the ageing tracker: evaluation of the runs of ``ageing_track.py --freeze ...`` (Sec. III-D, "Two remedies on the filter side ... did not help"; see FREEZE_CV.md).
+"""CV freeze of the ageing tracker: evaluation of the runs of ``ageing_track.py --freeze ...`` (Sec. III-D, "Two remedies on the filter side ... did not help"; Appendix C).
 
 Reads <results>/traj/ageing_track_seed<s><suffix>.npz for the variants  none ('' = the paper's run), phase (``--freeze phase``: parameter rows of the gain zero in the CV of every RPT, cell
 state still updated) and phase-noupdate (``--freeze phase --cv-update none``: no measurement update in that CV), voltage (``--freeze voltage``), and writes in <results>:

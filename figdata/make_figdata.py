@@ -98,13 +98,13 @@ for tg in ["th1", "th2", "th4"]:
     h = cc[(cc.theta == tg) & (cc.t_from_cc_start_s >= 0) & (cc.current_A < -0.5)].copy(); h["tmin"] = h.t_from_cc_start_s / 60
     w(h.iloc[::3][["tmin", "phi_pl_reference_mV", "phi_pl_EKF_mV", "phi_pl_UKF_SPMe_mV"]], f"cc_{tg}.csv")
 
-# ---- Fig. 10: 3C discharge
+# ---- 3C discharge traces (no longer in the paper; data and figures/fig_discharge.tex kept)
 d = rd(SD, "fig_eta3C.csv")
 for tg in ["th2", "th4", "th5"]:
     q = d[(d.theta == tg) & (d.t_from_3C_onset_s >= -10) & (d.t_from_3C_onset_s <= 60)]
     w(q[["t_from_3C_onset_s", "eta_reference_mV", "eta_EKF_mV", "eta_UKF_SPMe_mV"]].rename(columns={"t_from_3C_onset_s": "t"}), f"dis_{tg}.csv")
 
-# ---- Fig. 11: residual certificate
+# ---- Fig. 10: residual certificate
 r = rd(SD, "fig_residual_m17.csv"); r["res"] = np.maximum(r.residual_inf_norm, 1e-12)
 w(r[["t_s", "res"]], "residual.csv"); w(r[r.fallback_active.astype(bool)][["t_s"]], "residual_fallback.csv")
 

@@ -1,4 +1,4 @@
-"""Charge experiments: grey-box DFN-EKF with state guard versus the SPMe unscented filter (Sec. III-C, Fig. 7, Tables III, IV, VI, Appendix D thresholds).
+"""Charge experiments: grey-box DFN-EKF with state guard versus the SPMe unscented filter (Sec. III-C, Fig. 7, Tables II, III, V, Appendix D thresholds).
 
 Protocol F6Q (F6Q3 for state th3): two P6L blocks, a 1C constant-current charge to nominal SOC 0.6 (1272 s; 372 s for F6Q3), a rest, and two 30 s 2C charge pulses
 terminated at 4.2 V. Reference: PyBaMM DFN (mesh 40/20/40, dt = 0.5 s). Five ageing states x seeds 0-9. Both filters see the same initial parameter offsets
@@ -16,7 +16,7 @@ Aggregate (reads the per-run files of --results, writes <results>/tables and <re
     python scripts/charge.py --aggregate --grid 4:1 --data data --results results
 Per-run outputs: <results>/traj/charge_<state>_s<seed>.npz (trajectories: t, I, V_ref, filter histories, spme_*), <results>/charge_<state>_s<seed>.csv (metrics per pulse x window
 x filter, threshold detection), <results>/charge_info_<state>_s<seed>.csv (certificate: guard rejections, Newton residuals, final parameters, CPU).
-Aggregate outputs: tables/tab_charge_m17.csv (Tables III and VI: one row per state x seed x charge pulse), tables/tab_cc_m17.csv (Table IV and Appendix D: thresholds on the 1C
+Aggregate outputs: tables/tab_charge_m17.csv (Tables II and V: one row per state x seed x charge pulse), tables/tab_cc_m17.csv (Table III and Appendix D: thresholds on the 1C
 charge), tables/charge_cc_runs.csv, tables/charge_summary.csv, tables/charge_text_numbers.csv, tables/charge_detection.csv, tables/charge_validity.csv,
 source_data/fig_eta_charge.csv (Fig. 7a-c) and source_data/fig_charge_cc.csv (Fig. 7d-f).
 """
@@ -133,7 +133,7 @@ def aggregate(args):
     thr_cols = [c for c in D.columns if c.startswith("thr")]
     met = ["E_phipl_rms_mV", "E_phipl_max_mV", "phipl_err_signed_mean_mV", "frac_unsafe_gt5mV", "phipl_min_err_mV", "E_eta_rms_mV", "ce_min_relerr_max_pct"]
 
-    # ---- Tables III and VI: one row per state x seed x charge pulse (window 'pulse'), plus the 90 s rest window
+    # ---- Tables II and V: one row per state x seed x charge pulse (window 'pulse'), plus the 90 s rest window
     P = D[D.window == "pulse"]; R_ = D[D.window == "rest90"]; rows = []
     for (th, sd, pid, pl), g in P.groupby(["theta", "seed", "pulse_id", "pulse"]):
         e = g[g["filter"] == "EKF"].iloc[0]; s = g[g["filter"] == "SPMe"].iloc[0]
@@ -148,7 +148,7 @@ def aggregate(args):
             for f, ser in [("EKF", e), ("SPMe", s)]: row[f"{c}_{f}"] = ser[c]
         rows.append(row)
     T = pd.DataFrame(rows)
-    cli.write_csv(T, args, "tables/tab_charge_m17.csv", note="Tables III and VI: per state, seed and charge pulse (kind 'pulse' = 2C pulses and P6L pulses, 'CC' = 1C charge). phi_pl errors in mV (RMS, signed mean, "
+    cli.write_csv(T, args, "tables/tab_charge_m17.csv", note="Tables II and V: per state, seed and charge pulse (kind 'pulse' = 2C pulses and P6L pulses, 'CC' = 1C charge). phi_pl errors in mV (RMS, signed mean, "
                   "fraction of samples more than 5 mV above the reference = unsafe side), eta RMS in mV, c_e,min error in %, margins = SPMe/EKF; thr*: detection of phi_pl crossings (delay + late, - early). " + NOTE_TAIL, float_format=None)
 
     # ---- the -2C pulses: summary per state and pulse (medians, worst runs), detection and validity of the guard
@@ -205,7 +205,7 @@ def aggregate(args):
                                   Ds_err_end_max=("Ds_err_end_pct", "max")).reset_index()
     cli.write_csv(V, args, "tables/charge_validity.csv", note="guard rejections, Newton residual of accepted steps and anode surface concentration, per state", float_format="%.6g")
 
-    # ---- Table IV and Appendix D: thresholds on the 1C constant-current charge (trajectories of the stored runs)
+    # ---- Table III and Appendix D: thresholds on the 1C constant-current charge (trajectories of the stored runs)
     cc = []
     for th in sorted(D.theta.unique()):
         r, ref = refs.get(th)
@@ -231,7 +231,7 @@ def aggregate(args):
                               false_alarms=int(g[f"thr{thr}_false_alarm"].astype(bool).sum()), t0_ref_s_median=g[f"thr{thr}_t_ref_s"].median(), t0_ref_s_min=g[f"thr{thr}_t_ref_s"].min(), t0_ref_s_max=g[f"thr{thr}_t_ref_s"].max(),
                               delay_s_median=dl.median(), delay_s_min=dl.min(), delay_s_max=dl.max(), err_pos_max_mV_median=g.err_pos_max_mV.median(), err_pos_max_mV_min=g.err_pos_max_mV.min(),
                               err_pos_max_mV_max=g.err_pos_max_mV.max(), phipl_ref_min_mV=g.phipl_ref_min_mV.median(), E_phipl_rms_mV_max=g.E_phipl_rms_mV.max()))
-        cli.write_csv(pd.DataFrame(o), args, "tables/tab_cc_m17.csv", note="Table IV and Appendix D: 1C constant-current charge of F6Q (starts at t_start_s), thresholds of phi_pl at +20/+10/0 mV, detection = first downward crossing "
+        cli.write_csv(pd.DataFrame(o), args, "tables/tab_cc_m17.csv", note="Table III and Appendix D: 1C constant-current charge of F6Q (starts at t_start_s), thresholds of phi_pl at +20/+10/0 mV, detection = first downward crossing "
                       "(delay + late, - early; false alarm = filter crosses, reference never does); err_pos_max = max(0, estimate - reference) over the charge; reference t0 = t0_ref_s. " + NOTE_TAIL, float_format="%.6g")
 
     # ---- source data of Fig. 7 (seed 0)
@@ -265,7 +265,7 @@ def aggregate(args):
 
 
 def main():
-    p = cli.parser("Sec. III-C, Fig. 7, Tables III, IV, VI, Appendix D", "grey-box EKF with state guard versus SPMe UKF on the charge protocol F6Q")
+    p = cli.parser("Sec. III-C, Fig. 7, Tables II, III, V, Appendix D", "grey-box EKF with state guard versus SPMe UKF on the charge protocol F6Q")
     p.add_argument("--aggregate", action="store_true", help="build the tables and source data from the per-run files in --results (no simulation)")
     p.add_argument("--resume", action="store_true", help="skip runs whose trajectory file already exists")
     args = p.parse_args()
