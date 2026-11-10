@@ -19,7 +19,7 @@ from replay import HostLink, read_profile  # noqa: E402
 
 
 def run(exe, prof, mode, dq, n):
-    t, I, V, T, _, _ = prof
+    t, I, V, T = prof[:4]
     link = HostLink(exe)
     info = link.ask("?")
     link.ask("R %s %.10g" % (mode, dq))

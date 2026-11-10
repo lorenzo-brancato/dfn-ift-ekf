@@ -49,7 +49,7 @@ SCALE = dict(c=1000.0, a=100.0, s=100.0, e=100.0, th=0.5)       # EKF.make_step'
 
 # ------------------------------------------------------------------ model
 def build_model(a, dt):
-    cs = cellset.load(datasets.cellset_path(a.dataset))
+    cs = cellset.load(datasets.cellset_path(a.dataset, getattr(a, "set", None)))
     cell = datasets.default_cell(a.dataset)
     T_K = a.T + 273.15
     P = cellset.params_for(cs, cell, T_K, film_share=a.film_share, ds_on="p")
@@ -199,31 +199,51 @@ def nest(a):
 
 
 # ------------------------------------------------------------------ filter (scripts/ekf_exp.py --start soc)
+TRUE = {"Rf": 1.0, "LLI": 0.0}            # identified (beginning-of-life) values, as scripts/ekf_exp.py
+
+
 def filter_setup(a, m, cs, cell, P, d):
-    """EKF of the golden runs: Rf free (log coordinate), LAM and Ds frozen, implicit closure; P0 = a lithium-conserving
-    charge offset of sd a.p0_q [A.h] plus independent shell noise; Rf random walk; R = (a.sigma_mV)^2."""
+    """EKF of the golden runs (scripts/ekf_exp.py): coordinates a.coords from Rf (log) and LLI (linear, in units of the
+    anode window), LAM and Ds frozen, implicit closure, R = (a.sigma_mV)^2, parameter random walk a.q_th of the ageing
+    range per sqrt(s). a.start 'soc': P0 = a lithium-conserving charge offset of sd a.p0_q [A.h] plus independent shell
+    noise. 'params': diagonal P0 (shell noise, a.p0_th of the range on the coordinates), start at the identified values.
+    a.li_sigma: relative sd of the lithium pseudo-measurement (None: off), referred to the beginning-of-life window."""
     import types
     Nn, Np, Nm, K, nel, N, nz = m.Nn, m.Np, m.Nm, m.K, m.nel, m.N, m.nz
     c = cs["cells"][cell]
+    coords = tuple(getattr(a, "coords", ("Rf",)))
+    start = getattr(a, "start", "soc")
+    li_sigma = getattr(a, "li_sigma", None)
     q0 = datasets.initial_charge(a.dataset, d, cs)
     z_of = lambda q: np.asarray(m.init_state(*cellset.c0_at(cs, cell, q)))
     v = np.zeros(nz)
     v[:Nn] = -P["cmax_n"] / c["Q_n"]; v[Nn:nel] = P["cmax_p"] / c["Q_p"]
-    ek = EKF(m, coords=("Rf",), fixed=dict(Rf=1.0, LAM=0.0, Ds=1.0), transform="free")
-    rng_w = np.array([RANGE["Rf"][1] - RANGE["Rf"][0]])
-    c0 = ek.coord_of(np.array([1.0])); dc = np.asarray(ek.dval_dc(jnp.asarray(c0)))
+    th1 = jnp.array([1.0, 1.0, 1.0])
+    li_ref = float(m.lithium(m.init_state(*cellset.c0_at(cs, cell, 0.0)), th1))
+    ek = EKF(m, coords=coords, fixed=dict(Rf=1.0, LAM=0.0, Ds=1.0), transform="free", li_sigma=li_sigma, li_ref=li_ref)
+    rng_w = np.array([RANGE[k][1] - RANGE[k][0] for k in coords])
+    c0 = ek.coord_of(np.array([TRUE[k] for k in coords])); dc = np.asarray(ek.dval_dc(jnp.asarray(c0)))
     sd_shell = a.p0_shell * np.concatenate([np.full(Nn, P["cmax_n"]), np.full(Np, P["cmax_p"])])
     sd_rest = np.concatenate([np.full(Nm * nel, 1.0), np.full(K * nel, 1.0), np.full(N, 3.0)])
     p0_th = a.p0_th * rng_w / dc
     P0sd = np.r_[sd_shell, sd_rest, p0_th]
     Qsd = np.r_[np.zeros(nz), a.q_th * rng_w * np.sqrt(m.dt) / dc]
     scale = np.concatenate([np.full(nel, SCALE["c"]), np.full(Nm * nel, SCALE["a"]), np.full(K * nel, SCALE["s"]),
-                            np.full(N, SCALE["e"]), np.full(1, SCALE["th"])])
+                            np.full(N, SCALE["e"]), np.full(len(coords), SCALE["th"])])
+    p0_q = a.p0_q if start == "soc" else 0.0
     P0 = np.zeros((ek.n, ek.n))
-    P0[:nz, :nz] = np.diag(P0sd[:nz] ** 2) + a.p0_q ** 2 * np.outer(v, v)
+    P0[:nz, :nz] = np.diag(P0sd[:nz] ** 2) + p0_q ** 2 * np.outer(v, v)
     P0[nz:, nz:] = np.diag(p0_th ** 2)
+    # lithium (step.DFN.lithium at theta = 1): Li = li_w . z [mol/m2], linear in the particle means and c_e
+    A_ = m.A
+    li_w = np.zeros(nz)
+    li_w[:Nn] = P["eps_sn"] * np.asarray(A_.dxn); li_w[Nn:nel] = P["eps_sp"] * np.asarray(A_.dxp)
+    li_w[nz - N:] = np.asarray(A_.eps) * np.asarray(A_.dx)
+    assert abs(li_w @ z_of(0.0) - li_ref) < 1e-9 * li_ref
     return types.SimpleNamespace(q0=q0, z_of=z_of, v=v, ek=ek, c0=c0, P0sd=P0sd, Qsd=Qsd, R=(a.sigma_mV * 1e-3) ** 2,
-                                 scale=scale, Q_ref=d["meta"]["Q_ref"], z0=z_of(q0), rng_w=rng_w, P0=P0, cell=c)
+                                 scale=scale, Q_ref=d["meta"]["Q_ref"], z0=z_of(q0), rng_w=rng_w, P0=P0, cell=c,
+                                 coords=coords, start=start, li_sigma=li_sigma, li_ref=li_ref, li_w=li_w, p0_q=p0_q,
+                                 dshift=P["dx_window_n"] * P["cmax_n"])
 
 
 def ekf_soc(fs, d, err):
@@ -245,6 +265,8 @@ def ekf_soc(fs, d, err):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dataset", default="exp_LP604765")
+    ap.add_argument("--set", default=None, help="cell set file in data/<dataset>/params (default: the dataset's current "
+                    "one); its id goes into the header (SET) and the replay's '?' reply")
     ap.add_argument("--dims", default="10,6,10,3,1", help="Nn,Ns,Np,Nm,K")
     ap.add_argument("--dt", default="1,5,20", help="step lengths [s] the board can use")
     ap.add_argument("--ekf-dt", type=float, default=5.0, help="EKF step [s] of the golden runs (one of --dt)")
@@ -258,19 +280,29 @@ def main():
     ap.add_argument("--p0-shell", type=float, default=0.005)
     ap.add_argument("--p0-th", type=float, default=0.3)
     ap.add_argument("--q-th", type=float, default=1e-4)
-    ap.add_argument("--ekf-err", default="0.4", help="start errors [A.h] of the golden EKF runs")
+    ap.add_argument("--ekf-err", default="0.4", help="[soc] start errors [A.h] of the golden EKF runs")
+    ap.add_argument("--coords", default="Rf", help="filter coordinates: Rf, or Rf,LLI (ageing)")
+    ap.add_argument("--start", default="soc", choices=("soc", "params"),
+                    help="soc: CYC20 from wrong charges (lithium-conserving P0); params: --test from the identified values")
+    ap.add_argument("--test", default="CYC20", help="record of the EKF golden run (and of q0, z0)")
+    ap.add_argument("--li-sigma", type=float, default=None, help="relative sd of the lithium pseudo-measurement")
     ap.add_argument("--ol-hours", type=float, default=2.0, help="CYC20 open-loop golden length [h]")
     ap.add_argument("--state-every", type=int, default=200)
     ap.add_argument("--no-golden", action="store_true")
     ap.add_argument("--no-ekf", action="store_true")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    a.coords = tuple(c_ for c_ in a.coords.split(",") if c_)
+    if "Rf" not in a.coords or set(a.coords) - {"Rf", "LLI"}:
+        sys.exit("--coords: Rf or Rf,LLI")
     a.dims = tuple(int(v) for v in a.dims.split(","))
     dts = [float(v) for v in a.dt.split(",")]
     if a.ekf_dt not in dts:
         sys.exit("--ekf-dt must be one of --dt")
     Nn, Ns, Np, Nm, K = a.dims
     tag = "%s_T%g_%d-%d-%d_m%dk%d" % (a.dataset.replace("exp_", "").lower(), a.T, Nn, Ns, Np, Nm, K)
+    if a.coords != ("Rf",) or a.start != "soc" or a.test != "CYC20":
+        tag += "_%s_%s" % ("".join(a.coords), a.test)
     out = a.out or os.path.join(HERE, "generated", tag)
     os.makedirs(os.path.join(out, "golden"), exist_ok=True)
 
@@ -280,7 +312,7 @@ def main():
     law = m.dlaw
     th1 = jnp.array([1.0, 1.0, 1.0])
     nel, N, nz = m.nel, m.N, m.nz
-    print("model %s: states %d, closure unknowns %d" % (tag, nz, A_.ng))
+    print("model %s: cell set %s, states %d, closure unknowns %d" % (tag, cs.get("id", "?"), nz, A_.ng))
 
     # ---- constants
     sk, smax, ctab = cathode_tables(m, dts, a.ntab)
@@ -293,8 +325,9 @@ def main():
     ent = P.get("entropic") or (0.0, 0.0, 0.0, 0.0)
 
     # ---- EKF set-up (scripts/ekf_exp.py, --start soc)
-    d_cyc = datasets.load(a.dataset, "CYC20", dt=a.ekf_dt)
+    d_cyc = datasets.load(a.dataset, a.test, dt=a.ekf_dt)
     fs = filter_setup(a, m, cs, cell, P, d_cyc)
+    nth = len(fs.coords)
     q0, z_of, v, ek, c0, P0sd, Qsd, R, scale, Q_ref, z0, rng_w = (
         fs.q0, fs.z_of, fs.v, fs.ek, fs.c0, fs.P0sd, fs.Qsd, fs.R, fs.scale, fs.Q_ref, fs.z0, fs.rng_w)
 
@@ -306,9 +339,12 @@ def main():
     h.raw('#include "dfn/config.h"')
     h.raw("namespace dfn_model {")
     h.raw('static const char TAG[] = "%s";' % tag)
+    h.raw('#define DFN_MODEL_SET "%s"  // cell set id (%s, created %s)' % (
+        cs.get("id", "?"), os.path.basename(datasets.cellset_path(a.dataset, a.set)), cs.get("created_utc", "?")))
     for nm_, v_ in (("NN", Nn), ("NS", Ns), ("NP", Np), ("NM", Nm), ("K", K), ("NEL", nel), ("N", N), ("NZ", nz),
                     ("NG", A_.ng), ("NDT", len(dts)), ("NTAB", a.ntab), ("NOCPN", len(cs["ocp"]["n"]["x"])),
-                    ("NOCPP", len(cs["ocp"]["p"]["y"])), ("NTH", 1)):
+                    ("NOCPP", len(cs["ocp"]["p"]["y"])), ("NTH", nth),
+                    ("ITH_LLI", fs.coords.index("LLI") if "LLI" in fs.coords else -1)):
         h.int_(nm_, v_)
     h.arr("DT", dts, "step lengths [s]")
     h.int_("EKF_IDT", dts.index(a.ekf_dt), "index of the EKF step of the golden runs")
@@ -360,15 +396,22 @@ def main():
         h.real(k_, c[k_])
     h.real("Q_ref", Q_ref)
     h.arr("w_p", np.asarray(A_.dxp) / (P["Lp"] * P["cmax_p"]), "ybar = w_p . c_avg,p")
-    h.real("q0", q0, "start of CYC20 [A.h below the top]")
+    h.real("q0", q0, "start of %s [A.h below the top]" % a.test)
     h.arr("z0", z0, "state at q0 (rested)")
     h.arr("dz_dq", v, "d z / d q [per A.h]: the lithium-conserving charge direction")
-    h.real("p0_q", a.p0_q, "sd of the initial charge [A.h]")
+    h.real("p0_q", fs.p0_q, "sd of the initial charge [A.h] (0: diagonal P0, start at the identified values)")
     h.arr("P0_sd", P0sd, "independent initial sd (physical units; theta in log coordinates)")
     h.arr("Q_sd", Qsd, "process noise sd per step")
     h.real("R_meas", R)
     h.arr("scale", scale, "EKF coordinate scaling")
     h.real("Rf_range", rng_w[0])
+    h.raw("// filter coordinates: %s (Rf: log of the multiplier; LLI: linear, units of the anode window)" % ",".join(fs.coords))
+    h.raw("#define DFN_MODEL_COORDS 1")
+    h.arr("C0", c0, "initial coordinates")
+    h.real("dshift", fs.dshift, "LLI = 1 lowers the anode means the closure sees by dx_window c_max,n [mol/m3]")
+    h.arr("li_w", fs.li_w, "lithium = li_w . z [mol/m2]")
+    h.real("li_ref", fs.li_ref, "lithium of the beginning-of-life window [mol/m2]")
+    h.real("li_sigma", fs.li_sigma or 0.0, "relative sd of the lithium pseudo-measurement (0: off)")
     h.raw("}  // namespace dfn_model")
     with open(os.path.join(out, "model.h"), "w", encoding="utf-8") as f:
         f.write("\n".join(h.lines) + "\n")
@@ -377,6 +420,18 @@ def main():
         return
 
     gdir = os.path.join(out, "golden")
+    if a.start == "params":                       # ageing golden only: the EKF from the identified values on --test
+        soc, sd_soc, soc_ref, Hk, wall = ekf_soc(fs, d_cyc, 0.0)
+        cols = dict(t=d_cyc["t"], I=d_cyc["I"], y=d_cyc["V"], V=Hk["V"], innov=Hk["innov"], Sy=Hk["Sy"], soc=soc,
+                    sd_soc=sd_soc, res=Hk["resF"], li_rel=Hk["li_rel"])
+        for i, c_ in enumerate(fs.coords):
+            cols[c_] = Hk["vals"][:, i]; cols["sd_" + c_] = Hk["sd_vals"][:, i]
+        write_csv(os.path.join(gdir, "ekf_%s.csv" % a.test), cols)
+        print("EKF %s (%s): %d steps, %.2f ms/step, innov rmse %.1f mV, end %s, lithium drift %.2e" % (
+            a.test, ",".join(fs.coords), len(soc), 1e3 * wall / len(soc), 1e3 * np.sqrt(np.mean(Hk["innov"] ** 2)),
+            ", ".join("%s %.4f +- %.4f" % (c_, Hk["vals"][-1, i], Hk["sd_vals"][-1, i]) for i, c_ in enumerate(fs.coords)),
+            Hk["li_rel"][-1]))
+        return
     # ---- open loop: HPPC20 on mixed steps, CYC20 uniform
     runs = []
     if a.dataset == "exp_LP604765" and dts == [1.0, 5.0, 20.0]:

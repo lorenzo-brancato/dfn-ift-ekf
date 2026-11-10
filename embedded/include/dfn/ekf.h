@@ -17,14 +17,27 @@
 #define DFN_COV_UD 1
 #endif
 
+#ifndef DFN_MODEL_COORDS                   // headers exported before the coordinates were recorded: Rf only
+namespace dfn_model {
+constexpr int ITH_LLI = -1;
+static const real_t dshift = 0, li_ref = 0, li_sigma = 0;
+static const real_t li_w[NZ] = {};
+}  // namespace dfn_model
+#endif
+
 namespace dfn {
 
+// Coordinates (header: NTH, ITH_LLI): Rf first (log of the film multiplier), then LLI when estimated (linear, in units of
+// the anode window: the closure sees the anode means lowered by LLI dshift). With li_sigma > 0, after the voltage update,
+// the state's total lithium (li_w . z) is measured equal to li_ref with relative sd li_sigma (dfnekf.ekf.EKF li_sigma).
 constexpr int NX = NZ + NTH;
 constexpr int NR = NEL + NP;
 constexpr int ITH = NZ;                    // index of the Rf coordinate
+constexpr int ILLI = ITH_LLI >= 0 ? NZ + ITH_LLI : -1;
 
 struct EkfOut {
     real_t V, innov, Sy, soc, sd_soc, Rf, sd_Rf, res, min_diag;
+    real_t LLI, sd_LLI, li_innov;          // LLI (0 when not estimated), lithium innovation [relative]
     int nit;
 };
 
@@ -32,8 +45,8 @@ class EKF {
 public:
     real_t x[NX];
 #if DFN_COV_UD
-    real_t U[NX + 1][NX];                  // unit upper triangular (row NX: the noise row of the time update)
-    real_t D[NX + 1];
+    real_t U[NX + NTH][NX];                // unit upper triangular (rows NX..: the noise rows of the time update)
+    real_t D[NX + NTH];
 #else
     real_t P[NX][NX];
     real_t PV[NX][NR], Wb[NX][NR];
@@ -41,21 +54,23 @@ public:
     creal_t g[NG];
     real_t Us[NX][NR], Vts[NR][NX];
     real_t f[NX], hs[NX], Ph[NX], Kg[NX], du[NX];
-    real_t Swc[NO][NEL], Swe[NO][N], Ckp[NO][NP], Cth[NO];
+    real_t Swc[NO][NEL], Swe[NO][N], Ckp[NO][NP], Cth[NO][NTH];
     real_t dvec[NZP];
     creal_t Xo[NO][NG];
     StepConsts C;
     ClosureIn in;
     Closure cl;
-    real_t w_ws[NX], w_ld[NX], w_fv[NX], w_v[NX], w_b[NX], w_t[NX], w_Dw[NX + 1], w_z[NZ];   // work arrays
+    real_t w_ws[NX], w_ld[NX], w_fv[NX], w_v[NX], w_b[NX], w_t[NX], w_Dw[NX + NTH], w_z[NZ], w_h[NX];   // work arrays
     real_t R;
     real_t jitter;
     real_t ce_floor;
 
-    // x0: initial state (NZ) and coordinate; P0 from the model header: diag(P0_sd^2) + p0_q^2 dz_dq dz_dq^T (z block)
+    // x0: initial state (NZ), the Rf coordinate c0 (the others from the header's C0); P0 from the header:
+    // diag(P0_sd^2) + p0_q^2 dz_dq dz_dq^T (z block)
     void init(const real_t* z0, real_t c0, int idt0, real_t I0) {
         for (int i = 0; i < NZ; ++i) x[i] = z0[i];
         x[ITH] = c0;
+        for (int k = 1; k < NTH; ++k) x[NZ + k] = C0_of(k);
         R = R_meas; jitter = (real_t)1e-12; ce_floor = (real_t)20;
 #if DFN_COV_UD
         real_t (*P)[NX] = U;                                      // P0 built in U's storage, factorized in place
@@ -72,10 +87,24 @@ public:
 #endif
         step_consts(x, idt0, C);
         closure_in(x, I0, Rf0 * r_exp(x[ITH]), C, in);
+        shift_lli(ILLI >= 0 ? x[ILLI >= 0 ? ILLI : 0] : (real_t)0);
         cl.init_refs(in);
         cl.guess(in, in.I, g);
         int k;
         cl.newton(g, in, (creal_t)DFN_NEWTON_TOL, 60, &k);
+    }
+
+    static real_t C0_of(int k) {
+#ifdef DFN_MODEL_COORDS
+        return C0[k];
+#else
+        (void)k; return 0;
+#endif
+    }
+    // the closure sees the anode means lowered by LLI dshift (EKF.zeff_of): the surface concentrations shift with them
+    void shift_lli(real_t lli) {
+        if (ILLI < 0 || lli == 0) return;
+        for (int i = 0; i < NN; ++i) in.csn[i] -= (creal_t)(lli * dshift);
     }
 
 #if !DFN_COV_UD
@@ -229,20 +258,25 @@ public:
             for (int i = 0; i < NX; ++i) U[k][i] = t[i];
             Dw[k] = D[k];
         }
-        for (int i = 0; i < NX; ++i) U[NX][i] = 0;
-        U[NX][ITH] = 1;
-        Dw[NX] = qth;
+        for (int q = 0; q < NTH; ++q) {                              // noise rows: random walk of each coordinate
+            for (int i = 0; i < NX; ++i) U[NX + q][i] = 0;
+            U[NX + q][NZ + q] = 1;
+            const real_t qs = Q_sd[NZ + q] / scale[NZ + q];
+            Dw[NX + q] = qs * qs;
+        }
+        (void)qth;
+        constexpr int NW = NX + NTH;
         for (int j = NX - 1; j >= 0; --j) {                          // MWGS from the last row of W
             real_t sg = 0;
-            for (int k = 0; k <= NX; ++k) sg += U[k][j] * U[k][j] * Dw[k];
+            for (int k = 0; k < NW; ++k) sg += U[k][j] * U[k][j] * Dw[k];
             D[j] = sg > jitter ? sg : jitter;                        // floor on D only: the projections use the true sg
             for (int i = 0; i < j; ++i) {
                 real_t c = 0;
                 if (sg > jitter) {
-                    for (int k = 0; k <= NX; ++k) c += U[k][i] * Dw[k] * U[k][j];
+                    for (int k = 0; k < NW; ++k) c += U[k][i] * Dw[k] * U[k][j];
                     c /= sg;
                 }
-                for (int k = 0; k <= NX; ++k) U[k][i] -= c * U[k][j];
+                for (int k = 0; k < NW; ++k) U[k][i] -= c * U[k][j];
                 t[i] = c;
             }
             for (int i = 0; i < j; ++i) U[i][j] = t[i];             // column j of the new U (column j of W^T is dead)
@@ -288,12 +322,18 @@ public:
             }
             creal_t st = 0;
             for (int i = 0; i < NN; ++i) st += X[i] * cl.bn[i].Gd * g[i];
-            Cth[o] = (real_t)(-st * (creal_t)Rf0 * (creal_t)Rf_mult);
+            Cth[o][0] = (real_t)(-st * (creal_t)Rf0 * (creal_t)Rf_mult);
         }
         if (ent_dT != 0) {
             for (int i = 0; i < NN; ++i) Swc[NEL][i] += ent_dT * ent_dn / (cmax_n * NN);
             for (int i = 0; i < NP; ++i) Swc[NEL][NN + i] += ent_dT * ent_dp / (cmax_p * NP);
         }
+        if (ILLI >= 0)                                               // d(j, V)/dLLI through the anode means the closure sees
+            for (int o = 0; o < NO; ++o) {
+                real_t sa = 0;
+                for (int i = 0; i < NN; ++i) sa += Swc[o][i];
+                Cth[o][ILLI - NZ] = -(real_t)dshift * sa;
+            }
         // Lambda diagonal
         for (int i = 0; i < NEL; ++i) {
             dvec[IC + i] = 1;
@@ -337,7 +377,7 @@ public:
                 for (int k = 0; k < K; ++k) row[IS + k * NEL + i] = v;
             }
             for (int k = 0; k < N; ++k) row[IE + k] = Swe[o][k];
-            row[ITH] = Cth[o];
+            for (int k = 0; k < NTH; ++k) row[NZ + k] = Cth[o][k];
             for (int c = 0; c < NX; ++c) row[c] *= scale[c];
         }
         for (int i = 0; i < NP; ++i) {
@@ -355,11 +395,12 @@ public:
         const real_t Rf_mult = r_exp(x[ITH]);
         step_consts(z, idt, C);
         closure_in(z, I, Rf0 * Rf_mult, C, in);
+        shift_lli(ILLI >= 0 ? x[ILLI >= 0 ? ILLI : 0] : (real_t)0);
         out.res = (real_t)cl.solve(g, in);
         out.nit = cl.nit_last;
         out.V = (real_t)cl.V_of(g, in.I, in);
         advance(z, g, C, f);
-        f[ITH] = x[ITH];
+        for (int k = 0; k < NTH; ++k) f[NZ + k] = x[NZ + k];      // coordinates: random walks (Phi = identity)
         linearize(z, Rf_mult);
     }
 
@@ -370,15 +411,59 @@ public:
         for (int i = 0; i < NZ; ++i) z[i] = x[i];
         step_consts(z, idt, C);
         closure_in(z, I, Rf0 * r_exp(x[ITH]), C, in);
+        shift_lli(ILLI >= 0 ? x[ILLI >= 0 ? ILLI : 0] : (real_t)0);
         out.res = (real_t)cl.solve(g, in);
         out.nit = cl.nit_last;
         out.V = (real_t)cl.V_of(g, in.I, in);
         advance(z, g, C, x);
         out.soc = soc_of_ybar(ybar(x));
-        out.innov = out.Sy = out.sd_soc = out.sd_Rf = out.min_diag = 0;
+        out.innov = out.Sy = out.sd_soc = out.sd_Rf = out.min_diag = out.sd_LLI = out.li_innov = 0;
         out.Rf = r_exp(x[ITH]);
+        out.LLI = ILLI >= 0 ? x[ILLI >= 0 ? ILLI : 0] : (real_t)0;
         return out;
     }
+
+    // lithium pseudo-measurement after the voltage update (du holds that update's correction): Li(x + scale du) = li_ref
+    // +- li_sigma li_ref; adds its correction to du. Returns the relative innovation (0 when off).
+    real_t lithium_update() {
+        if (!(li_sigma > 0)) return 0;
+        real_t* h = w_h;
+        real_t li = 0;
+        for (int i = 0; i < NX; ++i) {
+            const real_t w = i < NZ ? li_w[i] : (real_t)0;
+            h[i] = w * scale[i];
+            li += w * (x[i] + scale[i] * du[i]);
+        }
+        const real_t inn = li_ref - li, Rl = (li_sigma * li_ref) * (li_sigma * li_ref);
+        real_t K2s[NX];
+#if DFN_COV_UD
+        ud_update(h, Rl, K2s);
+#else
+        joseph_update(h, Rl, K2s);
+#endif
+        for (int i = 0; i < NX; ++i) du[i] += K2s[i] * inn;
+        return inn / li_ref;
+    }
+#if !DFN_COV_UD
+    // P <- P - K Ph^T - Ph K^T + S K K^T + jitter I (Joseph form for the optimal gain, symmetric); returns S
+    real_t joseph_update(const real_t* h, real_t Rm, real_t* K) {
+        real_t Sy = Rm;
+        for (int i = 0; i < NX; ++i) {
+            real_t s = 0;
+            for (int j = 0; j < NX; ++j) s += P[i][j] * h[j];
+            Ph[i] = s;
+        }
+        for (int i = 0; i < NX; ++i) Sy += h[i] * Ph[i];
+        for (int i = 0; i < NX; ++i) K[i] = Ph[i] / Sy;
+        for (int i = 0; i < NX; ++i)
+            for (int j = i; j < NX; ++j) {
+                real_t v = P[i][j] - K[i] * Ph[j] - Ph[i] * K[j] + Sy * K[i] * K[j];
+                P[i][j] = v; P[j][i] = v;
+            }
+        for (int i = 0; i < NX; ++i) P[i][i] += jitter;
+        return Sy;
+    }
+#endif
 
     EkfOut step(real_t I, real_t y, int idt, bool valid = true) {
         EkfOut out;
@@ -397,30 +482,25 @@ public:
             out.Sy = r_sqrt(quad(hs) + R);
             for (int i = 0; i < NX; ++i) du[i] = 0;
         }
+        out.li_innov = lithium_update();
         real_t vv = quad(ws), pth = P_ii(ITH), md = D[0];
+        real_t pl = ILLI >= 0 ? P_ii(ILLI) : (real_t)0;
         for (int i = 1; i < NX; ++i) if (D[i] < md) md = D[i];
 #else
         // ---- update (rank 1, Joseph form written symmetric)
-        real_t Sy = R;
-        for (int i = 0; i < NX; ++i) {
-            real_t s = 0;
-            for (int j = 0; j < NX; ++j) s += P[i][j] * hs[j];
-            Ph[i] = s;
-        }
-        for (int i = 0; i < NX; ++i) Sy += hs[i] * Ph[i];
-        out.Sy = r_sqrt(Sy);
         if (valid) {
-            for (int i = 0; i < NX; ++i) { Kg[i] = Ph[i] / Sy; du[i] = Kg[i] * out.innov; }
-            for (int i = 0; i < NX; ++i)
-                for (int j = i; j < NX; ++j) {
-                    real_t v = P[i][j] - Kg[i] * Ph[j] - Ph[i] * Kg[j] + Sy * Kg[i] * Kg[j];
-                    P[i][j] = v; P[j][i] = v;
-                }
-            for (int i = 0; i < NX; ++i) P[i][i] += jitter;
+            out.Sy = r_sqrt(joseph_update(hs, R, Kg));
+            for (int i = 0; i < NX; ++i) du[i] = Kg[i] * out.innov;
         } else {
+            real_t Sy = R;
+            for (int i = 0; i < NX; ++i)
+                for (int j = 0; j < NX; ++j) Sy += hs[i] * P[i][j] * hs[j];
+            out.Sy = r_sqrt(Sy);
             for (int i = 0; i < NX; ++i) du[i] = 0;
         }
+        out.li_innov = lithium_update();
         real_t vv = 0, pth = P[ITH][ITH], md = P[0][0];
+        real_t pl = ILLI >= 0 ? P[ILLI >= 0 ? ILLI : 0][ILLI >= 0 ? ILLI : 0] : (real_t)0;
         for (int i = 0; i < NX; ++i) {
             if (ws[i] == 0) continue;
             for (int j = 0; j < NX; ++j) vv += ws[i] * P[i][j] * ws[j];
@@ -434,6 +514,9 @@ public:
         out.sd_soc = r_sqrt(vv) * Q_p / Q_ref;
         out.Rf = r_exp(x[ITH] + scale[ITH] * du[ITH]);
         out.sd_Rf = out.Rf * r_sqrt(pth) * scale[ITH];
+        constexpr int IL = ILLI >= 0 ? ILLI : 0;
+        out.LLI = ILLI >= 0 ? x[IL] + scale[IL] * du[IL] : (real_t)0;
+        out.sd_LLI = ILLI >= 0 ? r_sqrt(pl) * scale[IL] : (real_t)0;
         out.min_diag = md;
         // ---- prediction
         const real_t qth = (Q_sd[ITH] / scale[ITH]) * (Q_sd[ITH] / scale[ITH]);

@@ -28,7 +28,8 @@ def read_profile(path):
     T = [float(r["T"]) for r in rows] if "T" in cols else None
     ref_V = [float(r["V"]) for r in rows] if "V" in cols else None
     ref_soc = [float(r["soc"]) for r in rows] if "soc" in cols else None
-    return t, I, V, T, ref_V, ref_soc
+    ref_th = {k: [float(r[k]) for r in rows] for k in ("Rf", "LLI") if k in cols}
+    return t, I, V, T, ref_V, ref_soc, ref_th
 
 
 class HostLink:
@@ -78,13 +79,20 @@ def main():
     ap.add_argument("--timeout", type=float, default=10.0)
     ap.add_argument("--out", default=None, help="CSV of the replies")
     a = ap.parse_args()
-    t, I, V, T, ref_V, ref_soc = read_profile(a.profile)
+    t, I, V, T, ref_V, ref_soc, ref_th = read_profile(a.profile)
     n = len(t) if a.max_steps is None else min(a.max_steps, len(t))
     link = SerialLink(a.port, a.timeout) if a.port else HostLink(a.host_exe)
     print(link.ask("?"))
     print(link.ask("R %s %.10g" % (a.mode, a.dq)))
     out = []
+    fo = None                                   # the reply CSV is written (and flushed) as the run goes
+    if a.out:
+        fo = open(a.out, "w", newline="")
+        wo = csv.writer(fo)
+        wo.writerow(["t", "I", "V_meas", "V_pred", "soc", "sd_soc", "Rf", "sd_Rf", "res", "nit", "us", "LLI", "sd_LLI",
+                     "li_innov_rel"])
     dV = dS = 0.0
+    dth = {k: 0.0 for k in ref_th}
     us = []
     t0 = time.time()
     for k in range(n):
@@ -95,18 +103,29 @@ def main():
         f = r.split()
         Vp, soc, sd, Rf, sdRf, res = (float(x) for x in f[2:8])
         nit, u = int(f[8]), int(f[9])
+        lli, sdl, lin = (float(x) for x in f[10:13]) if len(f) >= 13 else (0.0, 0.0, 0.0)
         us.append(u)
+        if "Rf" in ref_th and a.mode == "e":
+            dth["Rf"] = max(dth["Rf"], abs(Rf - ref_th["Rf"][k]))
+        if "LLI" in ref_th and a.mode == "e":
+            dth["LLI"] = max(dth["LLI"], abs(lli - ref_th["LLI"][k]))
         if ref_V:
             dV = max(dV, abs(Vp - ref_V[k]))
         if ref_soc:                      # EKF golden: SOC after the update; open-loop golden: before the step
             kk = k if a.mode == "e" else k + 1
             if kk < n:
                 dS = max(dS, abs(soc - ref_soc[kk]))
-        out.append((t[k], I[k], V[k], Vp, soc, sd, Rf, sdRf, res, nit, u))
+        row = (t[k], I[k], V[k], Vp, soc, sd, Rf, sdRf, res, nit, u, lli, sdl, lin)
+        if fo:
+            wo.writerow(row)
+            if k % 50 == 0:
+                fo.flush()
         if k % 500 == 0:
-            print("  step %6d  t %8.0f s  V %.4f  SOC %6.2f %% +- %.2f  Rf %.3f  %6.1f ms" % (
-                k, t[k], Vp, 100 * soc, 100 * sd, Rf, u / 1e3), flush=True)
+            print("  step %6d  t %8.0f s  V %.4f  SOC %6.2f %% +- %.2f  Rf %.3f  LLI %.4f +- %.4f  %6.1f ms" % (
+                k, t[k], Vp, 100 * soc, 100 * sd, Rf, lli, sdl, u / 1e3), flush=True)
     link.close()
+    if fo:
+        fo.close()
     wall = time.time() - t0
     us_s = sorted(us)
     print("%d steps in %.1f s; step time median %.2f ms, max %.2f ms" % (n, wall, us_s[n // 2] / 1e3, us_s[-1] / 1e3))
@@ -114,12 +133,10 @@ def main():
         print("max |V - V_golden| %.3f mV" % (1e3 * dV))
     if ref_soc:
         print("max |SOC - SOC_golden| %.4f %%" % (100 * dS))
+    for k_, v_ in dth.items():
+        print("max |%s - %s_golden| %.3g" % (k_, k_, v_))
     if a.out:
-        with open(a.out, "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["t", "I", "V_meas", "V_pred", "soc", "sd_soc", "Rf", "sd_Rf", "res", "nit", "us"])
-            w.writerows(out)
-        print("wrote", a.out)
+        print("wrote", a.out, flush=True)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,13 @@
 // Line protocol of the replay (board sketch and host stand-in), ASCII, one command per line:
 //
-//   ?                        -> "# tag=<model> NZ= NX= NG= DT=<list> T=<degC> real=float|double cov=UD|Joseph bytes=<filter>"
+//   ?                        -> "# tag=<model> set=<cell set id> NZ= NX= NG= DT=<list> T=<degC> real=... cov=... bytes=<filter>"
 //   R <mode> <dq>            reset: mode 'e' (EKF) or 'o' (open loop), start at q0 + dq [A.h below the top of the window]
 //                            (q0: the model's CYC20 start) -> "# reset ..."
 //   S <I> <V> <T> <dt>       one step: current [A, > 0 discharge], measured voltage [V] (EKF update; ignored in open
 //                            loop; NaN: no update), temperature [degC] (checked against the model's, not used yet),
 //                            step [s] (one of DT)
-//                            -> "O <k> <V_pred> <soc> <sd_soc> <Rf> <sd_Rf> <res> <nit> <us>"
+//                            -> "O <k> <V_pred> <soc> <sd_soc> <Rf> <sd_Rf> <res> <nit> <us> [<LLI> <sd_LLI> <li_innov>]"
+//                               (the bracket when the model estimates LLI)
 //                               V_pred = model voltage before the update, soc/sd_soc after it, us = step time
 //   anything else            -> "! <message>"
 // Numbers out are formatted here (no printf float support needed on the board).
@@ -67,6 +68,11 @@ public:
         char* p = out;
         if (line[0] == '?') {
             p = put_str(p, "# tag="); p = put_str(p, TAG);
+#ifdef DFN_MODEL_SET
+            p = put_str(p, " set="); p = put_str(p, DFN_MODEL_SET);
+#else
+            p = put_str(p, " set=unrecorded");                   // header exported before the set was recorded
+#endif
             p = put_str(p, " NZ="); p = put_int(p, NZ); p = put_str(p, " NX="); p = put_int(p, NX);
             p = put_str(p, " NG="); p = put_int(p, NG); p = put_str(p, " DT=");
             for (int d = 0; d < NDT; ++d) { if (d) *p++ = ','; p = put_int(p, (long)DT[d]); }
@@ -119,6 +125,11 @@ public:
             *p++ = ' '; p = put_sci(p, res, 3);
             *p++ = ' '; p = put_int(p, nit);
             *p++ = ' '; p = put_int(p, (long)us);
+            if (ILLI >= 0) {
+                *p++ = ' '; p = put_sci(p, o.LLI, 7);
+                *p++ = ' '; p = put_sci(p, o.sd_LLI, 4);
+                *p++ = ' '; p = put_sci(p, o.li_innov, 3);
+            }
             return;
         }
         put_str(p, "! unknown command");

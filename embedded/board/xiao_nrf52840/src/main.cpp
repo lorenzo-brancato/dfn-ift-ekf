@@ -1,6 +1,7 @@
 // Seeed XIAO nRF52840: replay of a recorded profile over USB serial (protocol: include/dfn/replay.h).
 // Host side: embedded/tools/replay.py --port COMx ... The model is chosen in platformio.ini (DFN_MODEL_HEADER).
 #include <Arduino.h>
+#include <Adafruit_TinyUSB.h>             // USB CDC Serial of the Adafruit core (PlatformIO links it only when included)
 #include "dfn/replay.h"
 
 static dfn::Replay rp;                    // the filter's buffers are static (.bss): no heap

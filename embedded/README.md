@@ -84,7 +84,9 @@ SOC against Coulomb counting on the same run (second half, rms): 0.50 %, as the 
 
 ## Discretization study (`tools/study.py`, `tools/host_timing.py`)
 
-fit_v2 parameters without refit, film share 0.5, soft edges 1e-3, 20 °C. Open loop: HPPC20 on the mixed steps
+**Cell set: fit_v2** (`lp604765_cellset_v2.json`; the dataset's current set is fit_v3b since commit 8fb542a, see below),
+without refit, film share 0.5, soft edges 1e-3, 20 °C. Headers record their set since 2026-11-09 (`DFN_MODEL_SET`,
+`export_model.py --set`, the replay's `?` reply); older ones answer `set=unrecorded`. Open loop: HPPC20 on the mixed steps
 (time-weighted RMSE, as the identification reports it), CYC20 on a 5-s grid (9.2 h). Maximum deviation: from the full
 model (10/6/10, 12 + 2). EKF: CYC20 at 5 s from −0.4 / +0.4 A.h, SOC error against Coulomb counting. C++: float, UD,
 one thread on the i7-9700; RAM = `sizeof(EKF)`, the filter's static memory, the same on the M4F.
@@ -111,5 +113,36 @@ one thread on the i7-9700; RAM = `sizeof(EKF)`, the filter's static memory, the 
 - 1-s against 5-s steps (10/6/10, open loop CYC20): RMSE 31.9 against 30.6 mV, so 5 s is not worse on this test.
 - The CYC20 RMSE here (30.6 mV) is above the 23.9 mV of the identification: this model moves half of R_contact into the
   anode film (film share 0.5, so that Rf has a baseline) and starts CYC20 from the OCV placement at 5-s binning.
-- The board's time per step is not measured yet (the PlatformIO platform was not installed in this session).
 - Not done: a refit at the reduced sizes.
+
+With the **fit_v3b** set (10/6/10, CYC20 at 5 s, ±0.4 A.h) the EKF's SOC error does not depend on the modes either:
+0.82 % (2 + 1), 0.82-0.83 % (3 + 1), 0.83-0.84 % (4 + 1, 5 + 1, 8 + 1), 0.84-0.85 % (12 + 2), a bias of +0.8 %, innovation
+21 mV (fit_v2: 25 mV, bias -0.44 %). The open loop converges to 12 + 2 with the modes (CYC20, first 2 h: 22, 13, 7.5,
+4.7, 2.1, 0.3 mV at 3, 4, 5, 6, 8, 12 modes + 1 band). The SOC difference between the two sets is the parameters', not
+the discretization's.
+
+## Board (XIAO nRF52840, Seeed Adafruit core, `-O2`, float, UD)
+
+| Model (fit_v2) | RAM | Flash | EKF step | Accuracy against Python |
+|---|---|---|---|---|
+| 10/6/10, 3 + 1 (127 filter states) | 149 KB of 232 KB (63 %) | 203 KB of 792 KB | 0.59 s median, 0.63 s p95, 0.77 s max | full CYC20 (6645 steps of 5 s, from +0.4 A.h): V 0.043 mV, SOC 0.004 % max |
+
+RAM of the other builds (no BLE): 10/6/10 4 + 1 177 KB (75 %), 5 + 1 209 KB (88 %); 5/3/5 3 + 1 47 KB; 3/2/3 3 + 1 24 KB.
+## Ageing filter (Rf + LLI)
+
+`export_model.py --coords Rf,LLI --start params --test AGE30 --li-sigma 1e-4 --sigma-mV 14 --q-th 1e-4` (tag suffix
+`_RfLLI_AGE30`): the set-up of `scripts/ekf_exp.py --start params --coords Rf,LLI`. LLI is a second coordinate (linear, in
+units of the anode window: the closure sees the anode means lowered by LLI dx_window c_max,n; its Jacobian column is
+−dshift times the sum of the anode mean columns). The lithium pseudo-measurement (total lithium of the state = that of
+the beginning-of-life window, relative sd 1e-4) is a second scalar update after the voltage (Bierman in the UD form).
+Diagonal P0 (shell noise, 0.3 of the range on Rf and LLI), start at Rf = 1, LLI = 0.
+
+AGE30 (66.1 h, 25 cycles of 1C CC-CV / 1C discharge / 5 min rest, 47 609 steps of 5 s), fit_v3b, 10/6/10, 3 + 1:
+Python ends at Rf = 8.61 ± 0.18 (film multiplier), LLI = 0.312 ± 0.0003 of the anode window, innovation 34.9 mV,
+lithium drift 2e-7. C++ float (UD) against it over the whole run: V 0.25 mV, SOC 0.003 %, Rf 0.008, LLI 8e-5;
+2.3 ms per step on the PC. Board firmware (`m10_6_10_k31_age`): RAM 151.5 KB (64 %), flash 213 KB.
+On the board (2026-11-09/10, 7.8 h for the 66 h record): Rf = 8.60 ± 0.18, LLI = 0.3123 ± 0.0003 at the end; against
+Python over all 47 609 steps V 0.21 mV, SOC 0.002 %, Rf 0.007, LLI 5e-5; 0.58 s per step (median), 0.78 s max.
+
+After flashing, the board enumerates on a different COM port (USB ID 2886:8044, the stock firmware is 2886:8045).
+PlatformIO links the USB serial only when the sketch includes `Adafruit_TinyUSB.h`.
