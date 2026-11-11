@@ -55,7 +55,7 @@
 #define I_SELF_A 0.0
 #endif
 #ifndef BLE_NAME
-#define BLE_NAME "BATTAGE-DFN"
+#define BLE_NAME "MPM-LE EKF"
 #endif
 
 static const float RSHUNT = 0.015f;                          // R015
@@ -258,12 +258,35 @@ static void firmware_line() {                               // the dashboard che
 
 // ------------------------------------------------------------------ temperature (DHT22, ESP32-S3 board)
 static float t_amb = NAN;
-#if HAVE_DHT
+#if HAVE_DHT && TEMP_NTC
+// KY-013 analog module: 10 k NTC (B 3950) and a 10 k resistor between 3V3 and GND, the midpoint on S. Read
+// ratiometrically (reference VDD/4 at gain 1/4: full scale = VDD), so the supply cancels. NTC_ON_TOP: the NTC between
+// 3V3 and S (S rises with the temperature) instead of between S and GND.
+#ifndef NTC_ON_TOP
+#define NTC_ON_TOP 0
+#endif
+static float ntc_ratio = NAN;                                // last S / VDD (sensors-only output)
+struct NtcSensor {
+    void begin() { analogReference(AR_VDD4); analogReadResolution(12); }
+    float readTemperature() {
+        uint32_t s = 0;
+        for (int k = 0; k < 16; ++k) s += analogRead(PIN_NTC);
+        const float r = s / (16.0f * 4095.0f);
+        ntc_ratio = r;
+        if (r < 0.02f || r > 0.98f) return NAN;                // open or shorted
+        const float R = NTC_ON_TOP ? 10000.0f * (1 - r) / r : 10000.0f * r / (1 - r);
+        return 1.0f / (1.0f / 298.15f + logf(R / 10000.0f) / 3950.0f) - 273.15f;
+    }
+};
+static NtcSensor dht;
+#elif HAVE_DHT
 static DHT dht(PIN_DHT, DHT22);
+#endif
+#if HAVE_DHT
 static unsigned long dht_last = 0, dht_ok_ms = 0;
 static void dht_poll() {
     unsigned long now = millis();
-    if (now - dht_last < 5000) return;
+    if (now - dht_last < (TEMP_NTC ? 1000UL : 5000UL)) return;
     dht_last = now;
     float t = dht.readTemperature();
     if (t == t) { t_amb = t; dht_ok_ms = now; }
@@ -288,6 +311,7 @@ static double q_from_ocv(double V) {
     using namespace dfn_model;
     double best = 0, eb = 1e9;
     for (int i = 0; i <= 5600; ++i) {
+        if (i % 256 == 0) board_wdt_feed();
         double q = -0.4 + i * 0.0005;
         double x = (double)x100 - q / (double)Q_n, y = (double)y100 + q / (double)Q_p;
         if (x <= 0.001 || x >= 0.999 || y <= 0.001 || y >= 0.999) continue;
@@ -336,7 +360,7 @@ static bool kept_valid() {
         && kept.q == kept.q && kept.c0 == kept.c0;
 }
 #else
-static const char* reset_reason() { return "n/a"; }
+static const char* reset_reason() { return board_reset_reason(); }
 static void keep_state(const dfn::EkfOut&) {}
 static bool kept_valid() { return false; }
 #endif
@@ -350,14 +374,20 @@ static void init_at(double q, double c0) {
 }
 
 static void start_from_ocv(float V) {
+    crumb(5);
     double q = q_from_ocv(V);
+    crumb(6);
     init_at(q, 0);
+    crumb(7);
+    board_wdt_feed();
     char b[120], *p = b;
     p += sprintf(p, "# start from OCV: V ");
     p = fmt(p, V, 4); p += sprintf(p, " V -> q ");
     p = fmt(p, q, 4); p += sprintf(p, " A.h below the top, SoC ");
     p = fmt(p, dfn::soc_of_ybar(dfn::ybar(ekf.x)) * 100.0, 2); p += sprintf(p, " %%");
+    crumb(8);
     out(b);
+    crumb(9);
 }
 
 static void restart(bool allow_resume) {
@@ -379,11 +409,15 @@ static void restart(bool allow_resume) {
     }
 #endif
     resumed_once = true;
+    crumb(2);
 #if HAVE_DHT
     if (!(t_amb == t_amb)) { float t = dht.readTemperature(); if (t == t) t_amb = t; }   // the OCV at the cell's temperature
 #endif
+    crumb(3);
     if (t_amb == t_amb) dfn::TH.set((real_t)t_amb);
+    crumb(4);
     start_from_ocv(mean_v());
+    crumb(10);
     take(&q_, &v_, &n_);
     t_prev = millis();
     Ah_counted = 0;
@@ -391,10 +425,10 @@ static void restart(bool allow_resume) {
 
 static void status() {
     char b[260];
-    snprintf(b, sizeof(b), "# status: %s, model %s, step %d s, INA228 %s, OLED %s, BLE %s, DHT22 %s, last EKF step %lu ms, "
+    snprintf(b, sizeof(b), "# status: %s, model %s, step %d s, INA228 %s, OLED %s, BLE %s, %s %s, last EKF step %lu ms, "
              "up %lu s, last reset: %s",
              BOARD_NAME, dfn_model::TAG, STEP_S, ina_ok ? "ok" : "missing", oled_addr ? "ok" : "missing",
-             nus::connected() ? "connected" : "advertising", HAVE_DHT ? (t_amb == t_amb ? "ok" : "no reading") : "none",
+             nus::connected() ? "connected" : "advertising", TEMP_NTC ? "NTC" : "DHT22", HAVE_DHT ? (t_amb == t_amb ? "ok" : "no reading") : "none",
              last_ms, millis() / 1000UL, reset_reason());
     out(b);
 }
@@ -439,10 +473,14 @@ static void show(float I, float V, const dfn::EkfOut& o, unsigned long ms) {
     if (nus::connected()) { memcpy(p, "BLE ", 4); p += 4; }
     p = fmt(p, (double)ms, 0); *p++ = ' '; *p++ = 'm'; *p++ = 's'; *p = 0;
     draw_text(128 - text_w(b, 1), 56, b, 1);
+    crumb(29);
     oled_flush();
 }
 
-void setup() {
+static void app_setup() {
+#if !defined(ARDUINO_ARCH_ESP32)
+    board_boot_info();                                        // before Bluetooth takes the POWER registers
+#endif
     Serial.begin(115200);
 #if defined(ARDUINO_ARCH_ESP32)
     Serial.setTxTimeoutMs(0);                                 // no host reading the USB port: drop, do not block
@@ -451,6 +489,8 @@ void setup() {
     while (!Serial && millis() - w < 3000) delay(10);         // runs without a PC too
     board_begin_i2c();
     ina_ok = ina_init();
+    if (!ina_ok) { board_swap_ina_pins(); ina_ok = ina_init(); }   // SDA / SCL the other way round
+    if (!ina_ok) board_swap_ina_pins();
     oled_init();
     nus::begin(BLE_NAME);
 #if HAVE_DHT
@@ -467,6 +507,14 @@ void setup() {
     ble_ota::begin(out, nullptr);                           // rollback check of a just-installed image
 #endif
     firmware_line();
+#if !defined(ARDUINO_ARCH_ESP32)
+    if (board_prev_crumb) {                                   // where the previous run was when it was reset
+        snprintf(b, sizeof(b), "# previous run: last progress code %u before the %s reset", board_prev_crumb,
+                 board_reset_reason());
+        out(b);
+    }
+    board_wdt_start(30);                                      // a stuck firmware resets after 30 s
+#endif
     status();
     last_us = micros();
     board_start_sampler(SAMPLE_MS, sample_cb);
@@ -480,8 +528,10 @@ static void wait_for_cell() {
     static unsigned long last_msg = 0;
     float V = mean_v();
     if (v_ok(V)) {
+        crumb(1);
         restart(true);
         out(HEADER);
+        crumb(11);
         return;
     }
     unsigned long now = millis();
@@ -502,11 +552,47 @@ static void wait_for_cell() {
 
 // last EKF output, kept for the screen: V and I are redrawn every second (mean of the last second), the SOC at
 // each EKF step
+// Sensors only (env nrf52840_sensors, -DSENSORS_ONLY): no EKF; every second the mean V and I of the last second and
+// the DHT22 temperature, on the serial port, Bluetooth and the screen. A check of the wiring.
+#ifdef SENSORS_ONLY
+static void sensors_loop() {
+    static unsigned long last = 0;
+    unsigned long now = millis();
+    if (now - last < 1000) { delay(5); return; }
+    last = now;
+    float V = mean_v(), I = mean_i();
+    char b[96], *p = b;
+    p += sprintf(p, "# sensors: t ");
+    p = fmt(p, now * 1e-3, 1); p += sprintf(p, " s, V ");
+    p = fmt(p, V, 4); p += sprintf(p, " V, I ");
+    p = fmt(p, I * 1e3, 2); p += sprintf(p, " mA, T ");
+    p = fmt(p, t_amb, 1); p += sprintf(p, " degC");
+#if HAVE_DHT && TEMP_NTC
+    p += sprintf(p, " (NTC S/VDD "); p = fmt(p, ntc_ratio, 4); sprintf(p, ")");
+#endif
+    out(b);
+    if (!oled_addr) return;
+    memset(fb, 0, sizeof(fb));
+    draw_text(0, 1, "SENSORS", 1);
+    p = b; p = fmt(p, V, 3); *p++ = ' '; *p++ = 'V'; *p = 0;
+    draw_text(0, 18, b, 2);
+    p = b; p = fmt(p, I * 1e3, 1); *p++ = ' '; *p++ = 'm'; *p++ = 'A'; *p = 0;
+    draw_text(0, 36, b, 2);
+    p = b; *p++ = 'T'; *p++ = ' ';
+    if (t_amb == t_amb) { p = fmt(p, t_amb, 1); *p++ = ' '; *p++ = '*'; *p++ = 'C'; } else { *p++ = '-'; *p++ = '-'; }
+    *p = 0;
+    draw_text(0, 56, b, 1);
+    oled_flush();
+}
+#endif
+
 static dfn::EkfOut last_o;
 static bool have_o = false;
 static unsigned long last_show = 0;
 
-void loop() {
+static void app_loop() {
+    board_wdt_feed();
+    crumb(30);
     static char sline[64]; static size_t sn = 0;              // serial command line
     while (Serial.available()) {
         int c = Serial.read();
@@ -518,19 +604,28 @@ void loop() {
 #if defined(ARDUINO_ARCH_ESP32)
     ble_ota::poll();                                        // update chunks to flash, rollback confirmation, reboot
 #endif
+    crumb(31);
 #if HAVE_DHT
     dht_poll();
+#endif
+    crumb(32);
+#ifdef SENSORS_ONLY
+    sensors_loop();
+    return;
 #endif
     if (!ready) { wait_for_cell(); delay(5); return; }
     unsigned long now = millis();
     if (have_o && now - last_show >= 1000UL) {                  // screen: fresh V and I every second
         last_show = now;
+        crumb(33);
         show((float)(mean_i() + I_SELF_A), mean_v(), last_o, last_ms);
     }
     if (now - t_prev < (unsigned long)STEP_S * 1000UL) { delay(5); return; }
+    crumb(20);
     double q; float V; int nsamp;
     take(&q, &V, &nsamp);
     if (t_amb == t_amb) dfn::TH.set((real_t)t_amb);            // the model at the measured temperature
+    crumb(21);
     double dt = (now - t_prev) * 1e-3;
     float I = (float)(q / dt + I_SELF_A);
     t_prev = now;
@@ -539,11 +634,14 @@ void loop() {
     bool use = v_ok(V) && I == I;
     dfn::EkfOut o = ekf.step((real_t)I, (real_t)(use ? V : 3.7f), dfn_model::EKF_IDT, use);
     last_ms = millis() - t0;
+    crumb(22);
     if (!(o.soc == o.soc) || !(o.V == o.V)) {                 // state lost: start again from the OCV
+        crumb(26);
         out("# EKF state not finite: restarting from the OCV once the voltage is plausible");
         ready = false;
         return;
     }
+    crumb(27);
     int flags = (use ? 1 : 0) | (V < 3.3f ? 1 << 3 : 0) | (V < 3.0f ? 1 << 4 : 0) | (1 << 6)
               | ((HAVE_DHT && t_amb == t_amb) ? 0 : 1 << 7) | (I < -0.01f ? 1 << 8 : 0);
     char line[260], *p = line;
@@ -570,8 +668,27 @@ void loop() {
     p = fmt(p, (double)last_ms, 0); *p++ = ',';
     p = fmt(p, (double)nsamp, 0); *p++ = ',';
     p = fmt(p, dfn::TH.Tc, 2); *p = 0;
+    crumb(23);
     out(line);
+    crumb(24);
     last_o = o; have_o = true; last_show = millis();
     keep_state(o);
+    crumb(28);
     show(I, V, o, last_ms);
+    crumb(25);
 }
+
+// The nRF52840 core runs setup() and loop() on a 4 KB stack: the start from the OCV (Newton closure, OCV inversion,
+// printf) overflowed it and the board froze as soon as a cell appeared. There the firmware runs in its own task with
+// a 16 KB stack; the ESP32-S3's loop task has room enough.
+#if defined(ARDUINO_ARCH_ESP32)
+void setup() { app_setup(); }
+void loop() { app_loop(); }
+#else
+static void app_task(void*) {
+    app_setup();
+    for (;;) { app_loop(); yield(); }
+}
+void setup() { xTaskCreate(app_task, "dfn", 4096, nullptr, TASK_PRIO_LOW, nullptr); }   // 4096 words = 16 KB
+void loop() { delay(1000); }
+#endif
