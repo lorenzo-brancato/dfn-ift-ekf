@@ -13,6 +13,7 @@
 #error "define DFN_MODEL_HEADER (a model.h written by embedded/export_model.py)"
 #endif
 #include DFN_MODEL_HEADER
+#include "dfn/thermal.h"
 
 namespace dfn {
 using namespace dfn_model;
@@ -57,10 +58,10 @@ inline void step_consts(const real_t* z, int idt, StepConsts& C) {
     C.idt = idt;
     C.dt = DT[idt];
     real_t sk = 0;
-    for (int m = 0; m < NM; ++m) sk += an_gain[idt][m];
-    for (int k = 0; k < K; ++k) sk += (1 - an_rho[idt][k]) * an_W[idt][k];
+    for (int m = 0; m < NM; ++m) sk += TH.an_gain[idt][m];
+    for (int k = 0; k < K; ++k) sk += (1 - TH.an_rho[idt][k]) * TH.an_W[idt][k];
     C.kn = (3 * C.dt / Rn + sk) / FARADAY;
-    const real_t h = tab_smax / (real_t)(NTAB - 1);
+    const real_t h = (tab_smax - tab_s0) / (real_t)(NTAB - 1);
     for (int i = 0; i < NP; ++i) {
         real_t y = z[IC + NN + i] / cmax_p;
         real_t u = (y - law_y0) / (law_y1 - law_y0), dsdy = 0, s;
@@ -70,11 +71,13 @@ inline void step_consts(const real_t* z, int idt, StepConsts& C) {
         } else {
             s = r_pow((real_t)1e-12, law_shape);
         }
+        s += TH.sshift;                                            // D_p(T): a shift of the table axis
         if (s >= tab_smax) { s = tab_smax; dsdy = 0; }
-        int j = (int)(s / h);
+        if (s <= tab_s0) { s = tab_s0; dsdy = 0; }
+        int j = (int)((s - tab_s0) / h);
         if (j > NTAB - 2) j = NTAB - 2;
         if (j < 0) j = 0;
-        real_t t = (s - h * (real_t)j) / h, t2 = t * t, t3 = t2 * t;
+        real_t t = (s - tab_s0 - h * (real_t)j) / h, t2 = t * t, t3 = t2 * t;
         real_t h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
         real_t g00 = (6 * t2 - 6 * t) / h, g10 = 3 * t2 - 4 * t + 1, g01 = (-6 * t2 + 6 * t) / h, g11 = 3 * t2 - 2 * t;
         const real_t dcd = dsdy / cmax_p;                          // ds / d c_avg,p
@@ -117,18 +120,18 @@ inline void advance(const real_t* z, const creal_t* g, const StepConsts& C, real
         const real_t jF = (real_t)g[i] / FARADAY;
         z2[IC + i] = z[IC + i] - 3 / (an ? Rn : Rp) * jF * C.dt;
         for (int m = 0; m < NM; ++m) {
-            real_t e = an ? an_e[d][m] : C.ep[m][ip], gn = an ? an_gain[d][m] : C.gp[m][ip];
+            real_t e = an ? TH.an_e[d][m] : C.ep[m][ip], gn = an ? TH.an_gain[d][m] : C.gp[m][ip];
             z2[IA + m * NEL + i] = e * z[IA + m * NEL + i] - gn * jF;
         }
         for (int k = 0; k < K; ++k) {
-            real_t rho = an ? an_rho[d][k] : C.rp[k][ip], W = an ? an_W[d][k] : C.Wp[k][ip];
+            real_t rho = an ? TH.an_rho[d][k] : C.rp[k][ip], W = an ? TH.an_W[d][k] : C.Wp[k][ip];
             z2[IS + k * NEL + i] = rho * z[IS + k * NEL + i] - (1 - rho) * W * jF;
         }
     }
     for (int r = 0; r < N; ++r) {
         real_t s = 0;
-        for (int c = 0; c < N; ++c) s += E[d][r][c] * z[IE + c];
-        for (int c = 0; c < NEL; ++c) s += G[d][r][c] * (real_t)g[c];
+        for (int c = 0; c < N; ++c) s += TH.E[d][r][c] * z[IE + c];
+        for (int c = 0; c < NEL; ++c) s += TH.G[d][r][c] * (real_t)g[c];
         z2[IE + r] = s;
     }
 }
@@ -139,7 +142,54 @@ inline real_t ybar(const real_t* z) {
     for (int i = 0; i < NP; ++i) s += w_p[i] * z[IC + NN + i];
     return s;
 }
-inline real_t soc_of_ybar(real_t yb) { return 1 - (yb - y100) * Q_p / Q_ref; }
+// SOC from the cathode stoichiometry on the window between the model OCVs soc_vmax and soc_vmin (ekf_exp.py
+// --soc-vlim): SOC = (y_bot - ybar) / (y_bot - y_top). The ends follow the model's temperature (entropic term):
+// soc_window() recomputes them by bisection on the OCV when TH has moved. Headers without the window: the old read-out
+// 1 - (ybar - y100) Q_p / Q_ref.
+struct SocWindow { real_t y_top, y_bot, Tc; bool init; };
+inline SocWindow SW = {0, 0, 0, false};
+inline double ocv_at_q(double q) {                           // model OCV with q [A.h] below the top of the window
+    const double x = (double)x100 - q / (double)Q_n, y = (double)y100 + q / (double)Q_p;
+    return Up<double>(y) - Un<double>(x)
+           + (double)TH.entdT * ((double)ent_d0 + (double)ent_dn * (x - 0.5) + (double)ent_dp * (y - 0.5));
+}
+inline double q_at_ocv(double V, double lo = -0.4, double hi = 2.4) {   // bisection: OCV decreases with q
+    for (int i = 0; i < 60; ++i) {
+        const double mid = 0.5 * (lo + hi);
+        if (ocv_at_q(mid) > V) lo = mid; else hi = mid;
+    }
+    return 0.5 * (lo + hi);
+}
+inline const SocWindow& soc_window() {
+#ifdef DFN_MODEL_SOC_WINDOW
+    if (!SW.init || r_abs(SW.Tc - TH.Tc) > (real_t)0.05) {
+        if (r_abs(TH.Tc - (T - (real_t)273.15)) < (real_t)1e-6) {          // the export temperature: the exported ends
+            SW.y_top = soc_y_top; SW.y_bot = soc_y_bot;
+        } else {
+            SW.y_top = (real_t)((double)y100 + q_at_ocv((double)soc_vmax) / (double)Q_p);
+            SW.y_bot = (real_t)((double)y100 + q_at_ocv((double)soc_vmin) / (double)Q_p);
+        }
+        SW.Tc = TH.Tc; SW.init = true;
+    }
+#endif
+    return SW;
+}
+inline real_t soc_of_ybar(real_t yb) {
+#ifdef DFN_MODEL_SOC_WINDOW
+    const SocWindow& w = soc_window();
+    return (w.y_bot - yb) / (w.y_bot - w.y_top);
+#else
+    return 1 - (yb - y100) * Q_p / Q_ref;
+#endif
+}
+inline real_t soc_per_ybar() {                               // |d SOC / d ybar|
+#ifdef DFN_MODEL_SOC_WINDOW
+    const SocWindow& w = soc_window();
+    return 1 / (w.y_bot - w.y_top);
+#else
+    return Q_p / Q_ref;
+#endif
+}
 
 // ---------------------------------------------------------------- closure
 struct ClosureIn {
@@ -194,16 +244,16 @@ public:
         for (int i = 0; i < NP; ++i) cse_p[i] = in.csp[i] - (creal_t)C.kp[i] * g[NN + i];
         for (int r = 0; r < N; ++r) {
             creal_t s = 0;
-            for (int c = 0; c < N; ++c) s += (creal_t)E[d][r][c] * in.ce[c];
-            for (int c = 0; c < NEL; ++c) s += (creal_t)G[d][r][c] * g[c];
+            for (int c = 0; c < N; ++c) s += (creal_t)TH.E[d][r][c] * in.ce[c];
+            for (int c = 0; c < NEL; ++c) s += (creal_t)TH.G[d][r][c] * g[c];
             cee[r] = s;
         }
-        const creal_t f = (creal_t)f_RT, al = (creal_t)alpha;
+        const creal_t f = (creal_t)TH.fRT, al = (creal_t)alpha;
         for (int e = 0; e < 2; ++e) {
             const int n = e == 0 ? NN : NP;
             const creal_t cm = e == 0 ? (creal_t)cmax_n : (creal_t)cmax_p;
             const creal_t ew = e == 0 ? (creal_t)soft_e_n : (creal_t)soft_e_p;
-            const creal_t k0 = e == 0 ? (creal_t)k0_n : (creal_t)k0_p;
+            const creal_t k0 = e == 0 ? (creal_t)TH.k0n : (creal_t)TH.k0p;
             for (int i = 0; i < n; ++i) {
                 BV& b = e == 0 ? bn[i] : bp[i];
                 const creal_t c = e == 0 ? cse_n[i] : cse_p[i];
@@ -231,11 +281,11 @@ public:
             }
         }
         if (derivs) {
-            const creal_t chi_ = (creal_t)chi;
+            const creal_t chi_ = (creal_t)TH.chi;
             creal_t a[N], bb[N];                  // d ie_k / d ce_k, d ie_k / d ce_{k+1}
             for (int k = 0; k < N - 1; ++k) {
                 creal_t wl = (creal_t)wl_c[k], m = wl * cee[k] + (1 - wl) * cee[k + 1], inv = 1 / m;
-                creal_t dce = cee[k + 1] - cee[k], kc = (creal_t)Kd[k] * chi_;
+                creal_t dce = cee[k + 1] - cee[k], kc = (creal_t)(Kd[k] * TH.kscale) * chi_;
                 a[k] = kc * (-inv - dce * wl * inv * inv);
                 bb[k] = kc * (inv - dce * (1 - wl) * inv * inv);
             }
@@ -253,14 +303,14 @@ public:
         const creal_t* sn = g + OSN; const creal_t* sp = g + OSP;
         for (int i = 0; i < NN; ++i) r[i] = bn[i].r;
         for (int i = 0; i < NP; ++i) r[NN + i] = bp[i].r;
-        const creal_t chi_ = (creal_t)chi;
+        const creal_t chi_ = (creal_t)TH.chi;
         creal_t fl_prev = 0, ie_prev = 0, qe = 0;
         for (int i = 0; i < N; ++i) {
             creal_t fl = 0, iec = 0;
             if (i < N - 1) {
                 creal_t wl = (creal_t)wl_c[i];
-                fl = (creal_t)Kd[i] * (pe[i + 1] - pe[i]);
-                iec = (creal_t)Kd[i] * chi_ / (wl * cee[i] + (1 - wl) * cee[i + 1]) * (cee[i + 1] - cee[i]);
+                fl = (creal_t)(Kd[i] * TH.kscale) * (pe[i + 1] - pe[i]);
+                iec = (creal_t)(Kd[i] * TH.kscale) * chi_ / (wl * cee[i] + (1 - wl) * cee[i + 1]) * (cee[i + 1] - cee[i]);
             }
             creal_t aj = 0;
             if (i < NN) aj = (creal_t)a_n * jn[i] * (creal_t)dxn[i];
@@ -322,7 +372,7 @@ public:
                 for (int q = 0; q < NP; ++q) Jr[NN + q] = -(creal_t)a_p * (creal_t)dxp[q] * sq_n();
                 continue;
             }
-            creal_t kl = i > 0 ? (creal_t)Kd[i - 1] : creal_t(0), kr = i < N - 1 ? (creal_t)Kd[i] : creal_t(0);
+            creal_t kl = i > 0 ? (creal_t)(Kd[i - 1] * TH.kscale) : creal_t(0), kr = i < N - 1 ? (creal_t)(Kd[i] * TH.kscale) : creal_t(0);
             Jr[OPE + i] = (kl + kr) * se;
             if (i > 0) Jr[OPE + i - 1] = -kl * se;
             if (i < N - 1) Jr[OPE + i + 1] = -kr * se;
@@ -349,12 +399,12 @@ public:
         }
         // c_e,eff = E c_e + G j: J[:, :NEL] += (dF/dc_e) G
         for (int j = 0; j < NEL; ++j) {
-            for (int i = 0; i < NN; ++i) J[i * NG + j] += bn[i].dce * (creal_t)G[d][i][j];
-            for (int i = 0; i < NP; ++i) J[(NN + i) * NG + j] += bp[i].dce * (creal_t)G[d][NN + NS + i][j];
+            for (int i = 0; i < NN; ++i) J[i * NG + j] += bn[i].dce * (creal_t)TH.G[d][i][j];
+            for (int i = 0; i < NP; ++i) J[(NN + i) * NG + j] += bp[i].dce * (creal_t)TH.G[d][NN + NS + i][j];
             for (int i = 0; i < N - 1; ++i) {                          // (the balance row has no c_e)
-                creal_t s = De[i][1] * (creal_t)G[d][i][j];
-                if (i > 0) s += De[i][0] * (creal_t)G[d][i - 1][j];
-                if (i < N - 1) s += De[i][2] * (creal_t)G[d][i + 1][j];
+                creal_t s = De[i][1] * (creal_t)TH.G[d][i][j];
+                if (i > 0) s += De[i][0] * (creal_t)TH.G[d][i - 1][j];
+                if (i < N - 1) s += De[i][2] * (creal_t)TH.G[d][i + 1][j];
                 J[(OPE + i) * NG + j] += s * se;
             }
         }
@@ -521,13 +571,13 @@ public:
     }
 
     creal_t V_of(const creal_t* g, creal_t I, const ClosureIn& in) const {
-        creal_t V = (ref_sp + g[NG - 1]) - creal_t(0.5) * (creal_t)dxp[NP - 1] * (I / (creal_t)area) / (creal_t)sig_p - I * (creal_t)R_contact;
-        if (ent_dT != 0) {
+        creal_t V = (ref_sp + g[NG - 1]) - creal_t(0.5) * (creal_t)dxp[NP - 1] * (I / (creal_t)area) / (creal_t)sig_p - I * (creal_t)TH.Rc;
+        if (TH.entdT != 0) {
             creal_t mn = 0, mp = 0;
             for (int i = 0; i < NN; ++i) mn += in.csn[i];
             for (int i = 0; i < NP; ++i) mp += in.csp[i];
             mn /= (creal_t)(NN * cmax_n); mp /= (creal_t)(NP * cmax_p);
-            V += (creal_t)ent_dT * ((creal_t)ent_d0 + (creal_t)ent_dn * (mn - creal_t(0.5)) + (creal_t)ent_dp * (mp - creal_t(0.5)));
+            V += (creal_t)TH.entdT * ((creal_t)ent_d0 + (creal_t)ent_dn * (mn - creal_t(0.5)) + (creal_t)ent_dp * (mp - creal_t(0.5)));
         }
         return V;
     }

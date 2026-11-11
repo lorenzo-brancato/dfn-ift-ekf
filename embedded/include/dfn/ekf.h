@@ -116,7 +116,7 @@ public:
         for (int c = 0; c < NR; ++c) {
             for (int r = 0; r < N; ++r) {
                 real_t s = 0;
-                for (int l = 0; l < N; ++l) s += E[C.idt][r][l] * M[IE + l][c];
+                for (int l = 0; l < N; ++l) s += TH.E[C.idt][r][l] * M[IE + l][c];
                 t[r] = s;
             }
             for (int r = 0; r < N; ++r) M[IE + r][c] = t[r];
@@ -138,7 +138,7 @@ public:
                 if (!(j >= IE && j < IE + N)) P[i][j] *= di * dpart(j);
             for (int r = 0; r < N; ++r) {
                 real_t s = 0;
-                for (int l = 0; l < N; ++l) s += E[d][r][l] * P[i][IE + l];
+                for (int l = 0; l < N; ++l) s += TH.E[d][r][l] * P[i][IE + l];
                 t[r] = s;
             }
             for (int r = 0; r < N; ++r) { P[i][IE + r] = di * t[r]; P[IE + r][i] = di * t[r]; }
@@ -147,13 +147,13 @@ public:
         for (int r = 0; r < N; ++r)
             for (int c = 0; c < N; ++c) {
                 real_t s = 0;
-                for (int l = 0; l < N; ++l) s += E[d][r][l] * P[IE + l][IE + c];
+                for (int l = 0; l < N; ++l) s += TH.E[d][r][l] * P[IE + l][IE + c];
                 T1[r][c] = s;
             }
         for (int r = 0; r < N; ++r)
             for (int c = r; c < N; ++c) {
                 real_t s = 0;
-                for (int l = 0; l < N; ++l) s += T1[r][l] * E[d][c][l];
+                for (int l = 0; l < N; ++l) s += T1[r][l] * TH.E[d][c][l];
                 P[IE + r][IE + c] = s; P[IE + c][IE + r] = s;
             }
     }
@@ -172,7 +172,7 @@ public:
         for (int i = 0; i < NX; ++i) out[i] = (i >= IE && i < IE + N) ? (real_t)0 : dpart(i) * u[i];
         for (int r = 0; r < N; ++r) {
             real_t s = 0;
-            for (int l = 0; l < N; ++l) s += E[C.idt][r][l] * u[IE + l];
+            for (int l = 0; l < N; ++l) s += TH.E[C.idt][r][l] * u[IE + l];
             out[IE + r] = s;
         }
         for (int i = 0; i < NX; ++i) {
@@ -317,16 +317,16 @@ public:
             }
             for (int k = 0; k < N; ++k) {
                 creal_t s = 0;
-                for (int l = 0; l < N; ++l) s += yv[l] * (creal_t)E[d][l][k];
+                for (int l = 0; l < N; ++l) s += yv[l] * (creal_t)TH.E[d][l][k];
                 Swe[o][k] = (real_t)(-s);
             }
             creal_t st = 0;
             for (int i = 0; i < NN; ++i) st += X[i] * cl.bn[i].Gd * g[i];
             Cth[o][0] = (real_t)(-st * (creal_t)Rf0 * (creal_t)Rf_mult);
         }
-        if (ent_dT != 0) {
-            for (int i = 0; i < NN; ++i) Swc[NEL][i] += ent_dT * ent_dn / (cmax_n * NN);
-            for (int i = 0; i < NP; ++i) Swc[NEL][NN + i] += ent_dT * ent_dp / (cmax_p * NP);
+        if (TH.entdT != 0) {
+            for (int i = 0; i < NN; ++i) Swc[NEL][i] += TH.entdT * ent_dn / (cmax_n * NN);
+            for (int i = 0; i < NP; ++i) Swc[NEL][NN + i] += TH.entdT * ent_dp / (cmax_p * NP);
         }
         if (ILLI >= 0)                                               // d(j, V)/dLLI through the anode means the closure sees
             for (int o = 0; o < NO; ++o) {
@@ -337,8 +337,8 @@ public:
         // Lambda diagonal
         for (int i = 0; i < NEL; ++i) {
             dvec[IC + i] = 1;
-            for (int m = 0; m < NM; ++m) dvec[IA + m * NEL + i] = i < NN ? an_e[d][m] : C.ep[m][i - NN];
-            for (int k = 0; k < K; ++k) dvec[IS + k * NEL + i] = i < NN ? an_rho[d][k] : C.rp[k][i - NN];
+            for (int m = 0; m < NM; ++m) dvec[IA + m * NEL + i] = i < NN ? TH.an_e[d][m] : C.ep[m][i - NN];
+            for (int k = 0; k < K; ++k) dvec[IS + k * NEL + i] = i < NN ? TH.an_rho[d][k] : C.rp[k][i - NN];
         }
         // U (scaled rows)
         for (int r = 0; r < NX; ++r)
@@ -347,12 +347,12 @@ public:
             const bool an = j < NN;
             const int jp = j - NN;
             Us[IC + j][j] = -3 * C.dt / ((an ? Rn : Rp) * FARADAY);
-            for (int m = 0; m < NM; ++m) Us[IA + m * NEL + j][j] = -(an ? an_gain[d][m] : C.gp[m][jp]) / FARADAY;
+            for (int m = 0; m < NM; ++m) Us[IA + m * NEL + j][j] = -(an ? TH.an_gain[d][m] : C.gp[m][jp]) / FARADAY;
             for (int k = 0; k < K; ++k) {
-                real_t rho = an ? an_rho[d][k] : C.rp[k][jp], W = an ? an_W[d][k] : C.Wp[k][jp];
+                real_t rho = an ? TH.an_rho[d][k] : C.rp[k][jp], W = an ? TH.an_W[d][k] : C.Wp[k][jp];
                 Us[IS + k * NEL + j][j] = -(1 - rho) * W / FARADAY;
             }
-            for (int r = 0; r < N; ++r) Us[IE + r][j] = G[d][r][j];
+            for (int r = 0; r < N; ++r) Us[IE + r][j] = TH.G[d][r][j];
         }
         for (int i = 0; i < NP; ++i) {
             const int node = NN + i;
@@ -511,7 +511,7 @@ public:
         real_t yb = 0;
         for (int i = 0; i < NP; ++i) yb += w_p[i] * (x[IC + NN + i] + scale[IC + NN + i] * du[IC + NN + i]);
         out.soc = soc_of_ybar(yb);
-        out.sd_soc = r_sqrt(vv) * Q_p / Q_ref;
+        out.sd_soc = r_sqrt(vv) * soc_per_ybar();
         out.Rf = r_exp(x[ITH] + scale[ITH] * du[ITH]);
         out.sd_Rf = out.Rf * r_sqrt(pth) * scale[ITH];
         constexpr int IL = ILLI >= 0 ? ILLI : 0;

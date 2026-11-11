@@ -9,7 +9,10 @@
 //   V          measured voltage: mean of the last second of the step [V]
 //   I          step mean of the integrated current [A] (+ I_SELF_A, the board's own unmeasured draw, if set)
 //   I_inst     latest shunt reading [A]
-//   T_cell_C, T_amb_C   DHT22 air temperature [degC] (nan without it; the model runs at its fixed temperature)
+//   T_cell_C, T_amb_C   DHT22 air temperature [degC] (nan without it)
+//   T_model_C  the temperature the model runs at: the measured one when valid (dfn::TH.set: Arrhenius kinetics,
+//              diffusivities, R_contact, electrolyte, entropic term, from the header's tables), else the last one
+//              (at start: the header's, 20 degC)
 //   SoC, SoC_sig        EKF SOC and its 1 sigma
 //   SoH, SoH_sig        nan (not estimated by this model)
 //   V_est, innov        model voltage and innovation V - V_est [V]
@@ -35,6 +38,8 @@
 #include "dfn/ekf.h"
 #if defined(ARDUINO_ARCH_ESP32)
 #include "ble_ota.h"
+#include <esp_attr.h>
+#include <esp_system.h>
 #endif
 #if HAVE_DHT
 #include <DHT.h>
@@ -58,7 +63,7 @@ static const double CURRENT_LSB = 10.0 / 524288.0;           // A per LSB (10 A 
 static const uint8_t INA = 0x40;
 static const char HEADER[] =
     "# t_s,V,I,I_inst,T_cell_C,T_amb_C,SoC,SoC_sig,SoH,SoH_sig,V_est,innov,Q_Ah,flags,Rf,Rf_sig,LLI,res,nit,step_ms,"
-    "samples";
+    "samples,T_model_C";
 
 // ------------------------------------------------------------------ INA228
 static void ina_w16(uint8_t reg, uint16_t v) {
@@ -78,7 +83,9 @@ static bool ina_init() {
     ina_w16(0x00, 0x8000);                                   // reset
     delay(5);
     ina_w16(0x02, (uint16_t)(13107.2e6 * CURRENT_LSB * RSHUNT + 0.5));   // SHUNT_CAL (ADCRANGE 0, +-163.84 mV)
-    ina_w16(0x01, 0xDB6B);                                   // continuous shunt + bus, 1052 us, 64x average
+    // ADC_CONFIG: MODE 0xB = continuous shunt + bus, 1052 us each, 64x average. (It was 0xDB6B until 2026-11-10:
+    // MODE 0xD is bus + temperature, the shunt was never converted and the current stayed at its power-up value.)
+    ina_w16(0x01, 0xBB6B);
     return true;
 }
 static float ina_ishunt() {                                  // instantaneous current from VSHUNT [A]
@@ -101,6 +108,8 @@ static volatile float last_i = 0;
 static float vring[1000 / SAMPLE_MS];                        // bus voltages of the last second
 static const int VR_N = (int)(sizeof(vring) / sizeof(vring[0]));
 static int vring_i = 0, vring_n = 0;
+static float iring[1000 / SAMPLE_MS];                        // shunt currents of the last second (screen)
+static int iring_i = 0, iring_n = 0;
 static uint32_t last_us = 0;
 
 static void sample_cb() {
@@ -109,7 +118,11 @@ static void sample_cb() {
     double dt = (now - last_us) * 1e-6;
     last_us = now;
     BOARD_LOCK();
-    if (i == i) { acc_q += (double)i * dt; last_i = i; }
+    if (i == i) {
+        acc_q += (double)i * dt; last_i = i;
+        iring[iring_i] = i; iring_i = (iring_i + 1) % VR_N;
+        if (iring_n < VR_N) ++iring_n;
+    }
     if (v == v) {
         vring[vring_i] = v; vring_i = (vring_i + 1) % VR_N;
         if (vring_n < VR_N) ++vring_n;
@@ -126,6 +139,14 @@ static void take(double* q, float* v, int* n) {
     *v = vring_n ? (float)(sv / vring_n) : NAN;
     *n = step_n; step_n = 0;
     BOARD_UNLOCK();
+}
+static float mean_i() {                                      // mean shunt current of the last second [A]
+    BOARD_LOCK();
+    double si = 0;
+    for (int k = 0; k < iring_n; ++k) si += iring[k];
+    float i = iring_n ? (float)(si / iring_n) : NAN;
+    BOARD_UNLOCK();
+    return i;
 }
 static float mean_v() {
     BOARD_LOCK();
@@ -270,18 +291,67 @@ static double q_from_ocv(double V) {
         double q = -0.4 + i * 0.0005;
         double x = (double)x100 - q / (double)Q_n, y = (double)y100 + q / (double)Q_p;
         if (x <= 0.001 || x >= 0.999 || y <= 0.001 || y >= 0.999) continue;
-        double U = dfn::Up<double>(y) - dfn::Un<double>(x);
+        double U = dfn::Up<double>(y) - dfn::Un<double>(x)
+                 + (double)dfn::TH.entdT * ((double)ent_d0 + (double)ent_dn * (x - 0.5) + (double)ent_dp * (y - 0.5));
         if (U == U && fabs(U - V) < eb) { eb = fabs(U - V); best = q; }
     }
     return best;
 }
 
-static void start_from_ocv(float V) {
-    double q = q_from_ocv(V);
+// reset cause, and the estimate kept across a reset that does not remove the power (ESP32-S3: RTC memory, which a
+// software, watchdog or brown-out reset leaves alone): the EKF resumes from it instead of from the OCV, which under
+// a charge or discharge current is off by the polarization
+#if defined(ARDUINO_ARCH_ESP32)
+static const char* reset_reason() {
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON: return "power-on";
+        case ESP_RST_SW: return "software";
+        case ESP_RST_PANIC: return "crash";
+        case ESP_RST_INT_WDT: case ESP_RST_TASK_WDT: case ESP_RST_WDT: return "watchdog";
+        case ESP_RST_BROWNOUT: return "brown-out (supply dip)";
+        case ESP_RST_DEEPSLEEP: return "deep sleep";
+        case ESP_RST_EXT: return "reset pin";
+        default: return "other";
+    }
+}
+struct Kept { uint32_t magic; double q, c0, Ah; uint32_t check; };
+RTC_NOINIT_ATTR static Kept kept;
+static const uint32_t KEPT_MAGIC = 0xDF0E5A1Cu;
+static uint32_t kept_check(const Kept& k) {
+    const uint8_t* b = (const uint8_t*)&k;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < offsetof(Kept, check); ++i) h = (h ^ b[i]) * 16777619u;
+    return h;
+}
+static void keep_state(const dfn::EkfOut& o) {
+    kept.magic = KEPT_MAGIC;
+    kept.q = ((double)dfn::ybar(ekf.x) - (double)dfn_model::y100) * (double)dfn_model::Q_p;   // charge below the top
+    (void)o;
+    kept.c0 = log((double)o.Rf);
+    kept.Ah = Ah_counted;
+    kept.check = kept_check(kept);
+}
+static bool kept_valid() {
+    return esp_reset_reason() != ESP_RST_POWERON && kept.magic == KEPT_MAGIC && kept.check == kept_check(kept)
+        && kept.q == kept.q && kept.c0 == kept.c0;
+}
+#else
+static const char* reset_reason() { return "n/a"; }
+static void keep_state(const dfn::EkfOut&) {}
+static bool kept_valid() { return false; }
+#endif
+static bool resumed_once = false;
+
+static void init_at(double q, double c0) {
     real_t z0[dfn::NZ];
     for (int i = 0; i < dfn::NZ; ++i) z0[i] = (real_t)((double)dfn_model::z0[i] + (q - (double)dfn_model::q0) * (double)dfn_model::dz_dq[i]);
-    ekf.init(z0, 0, dfn_model::EKF_IDT, 0);
+    ekf.init(z0, (real_t)c0, dfn_model::EKF_IDT, 0);
     ready = true;
+}
+
+static void start_from_ocv(float V) {
+    double q = q_from_ocv(V);
+    init_at(q, 0);
     char b[120], *p = b;
     p += sprintf(p, "# start from OCV: V ");
     p = fmt(p, V, 4); p += sprintf(p, " V -> q ");
@@ -290,37 +360,59 @@ static void start_from_ocv(float V) {
     out(b);
 }
 
-static void restart() {
-    start_from_ocv(mean_v());
+static void restart(bool allow_resume) {
     double q_; float v_; int n_;
+#if defined(ARDUINO_ARCH_ESP32)
+    if (allow_resume && !resumed_once && kept_valid()) {
+        resumed_once = true;
+        init_at(kept.q, kept.c0);
+        Ah_counted = kept.Ah;
+        take(&q_, &v_, &n_);
+        t_prev = millis();
+        char b[120], *p = b;
+        p += sprintf(p, "# resumed after the %s reset: SoC ", reset_reason());
+        p = fmt(p, dfn::soc_of_ybar((real_t)((double)dfn_model::y100 + kept.q / (double)dfn_model::Q_p)) * 100.0, 2);
+        p += sprintf(p, " %%, Rf ");
+        p = fmt(p, exp(kept.c0), 3);
+        out(b);
+        return;
+    }
+#endif
+    resumed_once = true;
+#if HAVE_DHT
+    if (!(t_amb == t_amb)) { float t = dht.readTemperature(); if (t == t) t_amb = t; }   // the OCV at the cell's temperature
+#endif
+    if (t_amb == t_amb) dfn::TH.set((real_t)t_amb);
+    start_from_ocv(mean_v());
     take(&q_, &v_, &n_);
     t_prev = millis();
     Ah_counted = 0;
 }
 
 static void status() {
-    char b[200];
-    snprintf(b, sizeof(b), "# status: %s, model %s, step %d s, INA228 %s, OLED %s, BLE %s, DHT22 %s, last EKF step %lu ms",
+    char b[260];
+    snprintf(b, sizeof(b), "# status: %s, model %s, step %d s, INA228 %s, OLED %s, BLE %s, DHT22 %s, last EKF step %lu ms, "
+             "up %lu s, last reset: %s",
              BOARD_NAME, dfn_model::TAG, STEP_S, ina_ok ? "ok" : "missing", oled_addr ? "ok" : "missing",
              nus::connected() ? "connected" : "advertising", HAVE_DHT ? (t_amb == t_amb ? "ok" : "no reading") : "none",
-             last_ms);
+             last_ms, millis() / 1000UL, reset_reason());
     out(b);
 }
 
 static void command(const char* c) {
     while (*c == ' ') ++c;
     if (!*c) return;
-    if (!strcmp(c, "header")) out(HEADER);
+    if (!strcmp(c, "header")) { out(HEADER); status(); }      // the dashboard asks for it on connecting
     else if (!strcmp(c, "status")) { firmware_line(); status(); }
-    else if (!strcmp(c, "reset") || !strcmp(c, "r")) restart();
+    else if (!strcmp(c, "reset") || !strcmp(c, "r")) restart(false);
     else if (!strcmp(c, "help")) out("# commands: header, status, reset (re-initialize from the OCV now), help");
     else { char b[80]; snprintf(b, sizeof(b), "# unknown command: %.40s (help)", c); out(b); }
 }
 
 // Screen: 128x64, the top rows yellow, the rest blue.
 //   yellow: SOC (+- 1 sigma)
-//   blue:   SOC bar; measured V and step-mean I (discharge +); DHT22 temperature; bottom right DFN, BLE when a
-//           client is connected, EKF step time
+//   blue:   SOC bar; measured V and I (discharge +; mean of the last second, redrawn every second); DHT22
+//           temperature; bottom right DFN, BLE when a client is connected, EKF step time
 static void show(float I, float V, const dfn::EkfOut& o, unsigned long ms) {
     if (!oled_addr) return;
     memset(fb, 0, sizeof(fb));
@@ -376,7 +468,6 @@ void setup() {
 #endif
     firmware_line();
     status();
-    if (oled_addr) { memset(fb, 0, sizeof(fb)); draw_text(0, 24, "START...", 2); oled_flush(); }
     last_us = micros();
     board_start_sampler(SAMPLE_MS, sample_cb);
     delay(1200);                                              // a full second of readings before the first voltage
@@ -389,7 +480,7 @@ static void wait_for_cell() {
     static unsigned long last_msg = 0;
     float V = mean_v();
     if (v_ok(V)) {
-        restart();
+        restart(true);
         out(HEADER);
         return;
     }
@@ -409,6 +500,12 @@ static void wait_for_cell() {
     }
 }
 
+// last EKF output, kept for the screen: V and I are redrawn every second (mean of the last second), the SOC at
+// each EKF step
+static dfn::EkfOut last_o;
+static bool have_o = false;
+static unsigned long last_show = 0;
+
 void loop() {
     static char sline[64]; static size_t sn = 0;              // serial command line
     while (Serial.available()) {
@@ -426,9 +523,14 @@ void loop() {
 #endif
     if (!ready) { wait_for_cell(); delay(5); return; }
     unsigned long now = millis();
+    if (have_o && now - last_show >= 1000UL) {                  // screen: fresh V and I every second
+        last_show = now;
+        show((float)(mean_i() + I_SELF_A), mean_v(), last_o, last_ms);
+    }
     if (now - t_prev < (unsigned long)STEP_S * 1000UL) { delay(5); return; }
     double q; float V; int nsamp;
     take(&q, &V, &nsamp);
+    if (t_amb == t_amb) dfn::TH.set((real_t)t_amb);            // the model at the measured temperature
     double dt = (now - t_prev) * 1e-3;
     float I = (float)(q / dt + I_SELF_A);
     t_prev = now;
@@ -466,7 +568,10 @@ void loop() {
     *p++ = ',';
     p = fmt(p, o.nit, 0); *p++ = ',';
     p = fmt(p, (double)last_ms, 0); *p++ = ',';
-    p = fmt(p, (double)nsamp, 0); *p = 0;
+    p = fmt(p, (double)nsamp, 0); *p++ = ',';
+    p = fmt(p, dfn::TH.Tc, 2); *p = 0;
     out(line);
+    last_o = o; have_o = true; last_show = millis();
+    keep_state(o);
     show(I, V, o, last_ms);
 }
