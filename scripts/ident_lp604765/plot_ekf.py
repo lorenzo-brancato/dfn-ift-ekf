@@ -18,6 +18,7 @@ plt.style.use(os.path.join(HERE, os.pardir, os.pardir, "journal.mplstyle"))
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--test", default="CYC20")
+    ap.add_argument("--err-lim", type=float, default=25.0, help="SOC error axis [+- %]")
     ap.add_argument("--results", default=os.path.join(HERE, os.pardir, os.pardir, "results", "exp_LP604765", "ekf"))
     a = ap.parse_args()
     files = sorted(glob.glob(os.path.join(a.results, "ekf_%s_e*.npz" % a.test)), key=lambda f: float(np.load(f)["err"]))
@@ -38,10 +39,10 @@ def main():
             ax[0].plot(th, np.load(op), color=c, lw=0.6, ls=":", label="open loop, %s" % lab)
         if abs(e) > 0:
             ax[0].plot(th, r["V"], color=c, lw=0.6, label="EKF, %s" % lab)
-        soc, sd = 100 * r["soc_p"], 100 * r["sd_soc"]
+        soc, sd = 100 * (r["soc"] if "soc" in r else r["soc_p"]), 100 * r["sd_soc"]
         ax[1].plot(th, soc, color=c, lw=0.8, label="EKF, " + lab)
         err = soc - ref
-        ax[2].fill_between(th, -2 * sd, 2 * sd, color=c, alpha=0.12, lw=0)
+        ax[2].fill_between(th, err - 2 * sd, err + 2 * sd, color=c, alpha=0.25, lw=0)
         ax[2].plot(th, err, color=c, lw=0.8)
         if r["vals"].shape[1] == 0:
             ax[3].plot(th, 1e3 * r["innov"], color=c, lw=0.5)
@@ -51,8 +52,8 @@ def main():
                            color=c, alpha=0.12, lw=0)
     ax[0].set_ylabel("V [V]"); ax[0].set_ylim(2.6, 4.35); ax[0].legend(ncol=3, fontsize=6, loc="lower left")
     ax[1].set_ylabel("SOC [%]"); ax[1].legend(ncol=4, fontsize=6, loc="lower left")
-    ax[2].set_ylabel(r"SOC error [%]" "\n" r"(band $\pm 2\sigma$)"); ax[2].axhline(0, color="k", lw=0.5)
-    ax[2].set_ylim(-25, 25)
+    ax[2].set_ylabel(r"SOC error [%]" "\n" r"(error $\pm 2\sigma$)"); ax[2].axhline(0, color="k", lw=0.5)
+    ax[2].set_ylim(-a.err_lim, a.err_lim)
     if runs[0]["vals"].shape[1] == 0:
         ax[3].set_ylabel("innovation [mV]"); ax[3].set_ylim(-80, 80)
     else:
@@ -67,8 +68,10 @@ def main():
     k = th <= 0.5
     for r in runs:
         e = r["err"].item(); c = cols[e]
-        ax[0].plot(60 * th[k], 100 * r["soc_p"][k] - ref[k], color=c, lw=0.9, label=r"$\Delta q_0 = %+.1f$ A h" % e)
-        ax[0].fill_between(60 * th[k], -200 * r["sd_soc"][k], 200 * r["sd_soc"][k], color=c, alpha=0.12, lw=0)
+        sk = r["soc"] if "soc" in r else r["soc_p"]
+        ax[0].plot(60 * th[k], 100 * sk[k] - ref[k], color=c, lw=0.9, label=r"$\Delta q_0 = %+.1f$ A h" % e)
+        ek = 100 * sk[k] - ref[k]
+        ax[0].fill_between(60 * th[k], ek - 200 * r["sd_soc"][k], ek + 200 * r["sd_soc"][k], color=c, alpha=0.25, lw=0)
         ax[1].plot(60 * th[k], 1e3 * r["innov"][k], color=c, lw=0.6)
     ax[0].set_xlabel("t [min]"); ax[0].set_ylabel("SOC error [%]"); ax[0].legend(fontsize=6); ax[0].axhline(0, color="k", lw=0.5)
     ax[1].set_xlabel("t [min]"); ax[1].set_ylabel("innovation [mV]")

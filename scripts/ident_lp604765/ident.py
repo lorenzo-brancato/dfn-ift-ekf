@@ -105,7 +105,10 @@ def main():
     ap.add_argument("--jac", default="fd", choices=("fd", "ift"), help="Jacobian: central differences or exact (IFT)")
     ap.add_argument("--tests", default="hppc", help="fit set: hppc, B, or a list (as fit.py)")
     ap.add_argument("--ocp-p", default=None, help="cathode OCP table (ocp_sub.py json), as in the fit")
+    ap.add_argument("--thermal", action="store_true", help="lumped thermal state (LP_THERMAL=1, inherited by the workers)")
     a = ap.parse_args()
+    if a.thermal:
+        os.environ["LP_THERMAL"] = "1"
     Fm.TESTS[:] = C.TEST_SETS.get(a.tests, a.tests.split(","))
     if a.ocp_p:
         os.environ["LP_OCP_P"] = os.path.abspath(a.ocp_p)

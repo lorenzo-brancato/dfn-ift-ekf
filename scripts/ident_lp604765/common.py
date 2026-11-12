@@ -27,10 +27,10 @@ from lpmodel import BOUNDS as _B, NOMINAL as _N  # noqa: E402
 
 BOUNDS = {k: v for k, v in _B.items() if k != "dq"}
 # search box of the fit (narrower window than lpmodel.BOUNDS: outside it the window cannot hold the 40 C capacity)
-BOUNDS.update(x100=(0.5, 0.9, "lin"), y100=(0.3, 0.47, "lin"), Q_n=(3.0, 6.0, "lin"), Q_p=(3.0, 5.0, "lin"),
+BOUNDS.update(dq_20=(-0.2, 0.2, "lin"), x100=(0.5, 0.9, "lin"), y100=(0.3, 0.47, "lin"), Q_n=(3.0, 6.0, "lin"), Q_p=(3.0, 5.0, "lin"),
               Ds_p=(1e-15, 1e-12, "log"), dq_40=(-0.2, 0.1, "lin"), dq_00=(-0.1, 0.25, "lin"))
 NOMINAL = {k: v for k, v in _N.items() if k != "dq"}
-NOMINAL.update(dq_40=0.0, dq_00=0.0)
+NOMINAL.update(dq_40=0.0, dq_00=0.0, dq_20=0.0)     # dq_20: fitted only when the window is fixed from another cell
 ALL_NAMES = list(BOUNDS)
 
 
@@ -52,7 +52,7 @@ def model_params(p):
 def dq_of(p, ds, prof=None, model=None):
     if ds["dq"] == "ocv":
         return model.dq_from_ocv(model_params(p), ds["T"], prof["V_rest"])
-    return 0.0 if ds["dq"] == "dq_20" else float(p[ds["dq"]])
+    return float(p.get(ds["dq"], 0.0))
 
 
 def profiles(keys=None, rebuild=False):
@@ -124,7 +124,7 @@ def _vjac(args):
             if ds["dq"] == "ocv":
                 dq = m.dq_from_ocv_jax(pm, ds["T"], pr["V_rest"])
             else:
-                dq = jnp.asarray(0.0) if ds["dq"] == "dq_20" else pp[ds["dq"]]
+                dq = pp.get(ds["dq"], jnp.asarray(0.0))
             V = m._run(m.traced_jax(pm, ds["T"], dq), I, dt, idx, False)[0]
             return V, V
         _W["jac"][jk] = jax.jit(jax.jacfwd(f, has_aux=True))

@@ -45,6 +45,8 @@ NOMINAL = dict(
     dUdT0=0.45e-3, dUdT_n=-0.97e-3,
     x100=0.656, y100=0.405, Q_n=4.437, Q_p=3.541,
     dq=0.0,
+    hys_H=0.0, hys_g=50.0,                        # OCV hysteresis (cell level): charge-branch offset [V], rate [1/A.h]
+    th_C=40.0, th_hA=0.1,                         # lumped thermal state (--thermal): heat capacity [J/K], heat transfer [W/K]
 )
 # search box (log-scaled where marked)
 BOUNDS = dict(
@@ -54,6 +56,8 @@ BOUNDS = dict(
     dUdT0=(-1.5e-3, 1.5e-3, "lin"), dUdT_n=(-3e-3, 3e-3, "lin"),
     x100=(0.5, 0.95, "lin"), y100=(0.3, 0.5, "lin"), Q_n=(2.0, 6.0, "lin"), Q_p=(2.2, 5.0, "lin"),
     dq=(-0.15, 0.15, "lin"),
+    hys_H=(0.0, 0.08, "lin"), hys_g=(1.0, 1000.0, "log"),
+    th_C=(5.0, 200.0, "log"), th_hA=(0.005, 2.0, "log"),
 )
 
 
@@ -70,6 +74,9 @@ class Model:
         self.cs = json.load(open(LM3C, encoding="utf-8"))
         self.dims, self.grid, self.K, self.dts = dims, grid, K, tuple(float(d) for d in dts)
         self.ift = ift
+        # lumped thermal state (env LP_THERMAL=1, set by --thermal): the cell temperature is a state; every Arrhenius law,
+        # the electrolyte conductivity, the Butler-Volmer temperature and the entropic term follow it
+        self.thermal = os.environ.get("LP_THERMAL") == "1"
         self.ocp_n = _table(self.cs["ocp"]["n"]["x"], self.cs["ocp"]["n"]["U"])
         self.ocp_p = _table(self.cs["ocp"]["p"]["y"], self.cs["ocp"]["p"]["U"])
         self.ocp_p_source = "lm3c"
@@ -125,6 +132,7 @@ class Model:
         """Inverse of ocv on [lo, hi] A.h (monotone there): the start of a held-out test from its rested voltage."""
         q = np.linspace(lo, hi, n)
         v = self.ocv(p, T_C, q)
+        V = V - p.get("hys_H", 0.0)      # every test starts rested after a charge: on the charge branch (OCV + H)
         i = int(np.argmin(np.abs(v - V)))
         # linear refinement between the bracketing grid points: dq is then continuous in p (a grid snap makes it a
         # staircase, which corrupts finite-difference Jacobians of the window groups)
@@ -152,7 +160,9 @@ class Model:
         c0n, c0p = self.c0(p, P, dq)
         out = {k: jnp.asarray(float(P[k])) for k in self.NUM}
         dT, d0, dn, _ = P["entropic"]
-        out.update(c0n=c0n, c0p=c0p, dT=dT, dUdT0=d0, dUdT_n=dn, **{"law_" + k: v for k, v in P["dp_law"].items()})
+        out.update(c0n=c0n, c0p=c0p, dT=dT, dUdT0=d0, dUdT_n=dn, **{"law_" + k: v for k, v in P["dp_law"].items()},
+                   hys_H=p.get("hys_H", 0.0), hys_g=p.get("hys_g", NOMINAL["hys_g"]),
+                   **{k: p.get(k, NOMINAL[k]) for k in ("Ea_Dn", "Ea_Dp", "Ea_r", "Ea_s", "th_C", "th_hA")})
         return {k: jnp.asarray(float(v)) for k, v in out.items()}
 
     # ---- differentiable twins (exact-gradient fits): p holds jnp scalars, T_C is a constant of the test
@@ -175,7 +185,9 @@ class Model:
             T=jnp.asarray(T), dT=jnp.asarray(T - T_REF), dUdT0=p["dUdT0"], dUdT_n=p["dUdT_n"],
             c0n=(p["x100"] - dq / p["Q_n"]) * cmax_n, c0p=(p["y100"] + dq / p["Q_p"]) * cmax_p,
             law_drop=p["drop"], law_shape=p["shape"], law_y0=p["y100"],
-            law_y1=jnp.minimum(p["y100"] + Q_CELL / p["Q_p"], 0.999))
+            law_y1=jnp.minimum(p["y100"] + Q_CELL / p["Q_p"], 0.999),
+            hys_H=p.get("hys_H", 0.0), hys_g=p.get("hys_g", NOMINAL["hys_g"]),
+            **{k: p.get(k, NOMINAL[k]) for k in ("Ea_Dn", "Ea_Dp", "Ea_r", "Ea_s", "th_C", "th_hA")})
         return {k: jnp.asarray(v, dtype=jnp.float64) for k, v in out.items()}
 
     def ocv_jax(self, p, T_C, dq):
@@ -187,9 +199,10 @@ class Model:
         ocv(p, dq) = V through which d dq / d p = -(d ocv / d p) / (d ocv / d dq) flows (slope held constant)."""
         sg = jax.lax.stop_gradient
         ps = {k: sg(v) for k, v in p.items()}
-        dq0 = self._dq_grid_jax(ps, T_C, V)
+        Vd = V - p.get("hys_H", 0.0)                  # rested after a charge: charge branch (see dq_from_ocv)
+        dq0 = self._dq_grid_jax(ps, T_C, V - ps.get("hys_H", 0.0))
         slope = sg(jax.grad(lambda d: self.ocv_jax(ps, T_C, d))(dq0))
-        return dq0 - (self.ocv_jax(p, T_C, dq0) - V) / slope
+        return dq0 - (self.ocv_jax(p, T_C, dq0) - Vd) / slope
 
     def _dq_grid_jax(self, p, T_C, V, lo=-0.4, hi=2.4, n=11201):
         q = jnp.linspace(lo, hi, n)
@@ -224,24 +237,52 @@ class Model:
         z0 = m.init_state(q["c0n"], q["c0p"])
         kf = lambda C: (3.0 * C["dt"] / C["R"] + jnp.sum(C["gain"], 0) + jnp.sum((1 - C["rho"]) * C["W"], 0)) / F
 
+        thermal = self.thermal
+        T0 = q["T"]
+        if thermal:
+            e_ = self.cs["temperature"]["electrolyte"]
+            kT, kV = jnp.asarray(e_["T_K"]), jnp.asarray(e_["kappa"])
+            kap0 = jnp.interp(T0, kT, kV)
+
         def body(carry, xs):
-            z, g = carry
+            z, g, h, Tc = carry
             Ik, dtk, k = xs
-            Cn = pt.consts(P["Rn"], P["Ds_n"], dtk, Nm, K)
             c, a, s, ce = m.split(z)
-            Cp = m.cathode_consts(c[Nn_:], th, dtk)
+            mm, AA = m, A_
+            Ds_n = P["Ds_n"]
+            if thermal:                                # parameters at the cell temperature Tc (computed at T0 = chamber)
+                ark = (1.0 / Tc - 1.0 / T0) / R_GAS
+                fr = jnp.exp(-q["Ea_r"] * ark); rk = jnp.interp(Tc, kT, kV) / kap0
+                Ds_n = P["Ds_n"] * jnp.exp(-q["Ea_Dn"] * ark)
+                mm = copy.copy(m); mm.P = dict(P, Ds_p=P["Ds_p"] * jnp.exp(-q["Ea_Dp"] * ark))
+                AA = copy.copy(A_)
+                AA.P = dict(P, k0_n=P["k0_n"] * fr, k0_p=P["k0_p"] * fr, R_contact=P["R_contact"] * jnp.exp(q["Ea_s"] * ark),
+                            entropic=(Tc - T_REF, q["dUdT0"], q["dUdT_n"], 0.0))
+                AA.T = Tc; AA.chi = A_.chi * Tc / T0; AA.j_Kd = A_.j_Kd * rk; AA.j_A_e = A_.j_A_e * rk
+            Cn = pt.consts(P["Rn"], Ds_n, dtk, Nm, K)
+            Cp = mm.cathode_consts(c[Nn_:], th, dtk)
             Ek, Gk = E[k], G[k]
             imp = (kf(Cn), kf(Cp), Ek, Gk)
             csn, csp, _ = m.surf(z)
-            g, res, nit = (A_.solve_ift if self.ift else A_.solve_robust)(g, csn, csp, ce, Ik, th, tol=1e-9, imp=imp)
-            V = A_.V_of(g, Ik, csn, csp)
+            g, res, nit = (AA.solve_ift if self.ift else AA.solve_robust)(g, csn, csp, ce, Ik, th, tol=1e-9, imp=imp)
+            # OCV hysteresis: h relaxes to H on charge and to 0 on discharge, exponentially in the charge passed; held at rest
+            dec = jnp.exp(-q["hys_g"] * jnp.abs(Ik) * dtk / 3600.0)
+            h = dec * h + (1.0 - dec) * jnp.where(Ik < 0, q["hys_H"], 0.0)
+            V = AA.V_of(g, Ik, csn, csp) + h
+            if thermal:                                # heat: I (U - V) - I T dU/dT; exact step of C dT/dt = Q - hA (T - T0)
+                xb = jnp.mean(c[:Nn_]) / P["cmax_n"]; yb = jnp.mean(c[Nn_:]) / P["cmax_p"]
+                dUdT = q["dUdT0"] + q["dUdT_n"] * (xb - 0.5)
+                U = self.ocp_p(yb) - self.ocp_n(xb) + (Tc - T_REF) * dUdT
+                Qh = Ik * (U - V) - Ik * Tc * dUdT
+                ed = jnp.exp(-dtk * q["th_hA"] / q["th_C"])
+                Tc = T0 + (Tc - T0) * ed + Qh / q["th_hA"] * (1.0 - ed)
             jn, jp = g[:Nn_], g[Nn_:Nn_ + m.Np]
             stn = pt.step((c[:Nn_], a[:, :Nn_], s[:, :Nn_]), jn, Cn)
             stp = pt.step((c[Nn_:], a[:, Nn_:], s[:, Nn_:]), jp, Cp)
             z2 = m.join(jnp.concatenate([stn[0], stp[0]]), jnp.concatenate([stn[1], stp[1]], axis=1),
                         jnp.concatenate([stn[2], stp[2]], axis=1), Ek @ ce + Gk @ jnp.concatenate([jn, jp]))
             out = (V, res, jnp.mean(csn) / P["cmax_n"], jnp.mean(csp) / P["cmax_p"]) if full else (V, res)
-            return (z2, g), out
+            return (z2, g, h, Tc), out
 
         csn0, csp0, ce0 = m.surf(z0)
         if self.ift:                                   # only a warm start: its value matters, not its derivative
@@ -250,7 +291,7 @@ class Model:
             g0 = sg(As.newton(As.guess(a0[0], a0[1], a0[3], a0[4]), *a0)[0])
         else:
             g0 = A_.newton(A_.guess(csn0, csp0, I[0], th), csn0, csp0, ce0, I[0], th)[0]
-        return jax.lax.scan(body, (z0, g0), (I, dt, idx))[1]
+        return jax.lax.scan(body, (z0, g0, jnp.asarray(q["hys_H"], dtype=jnp.float64), jnp.asarray(T0, dtype=jnp.float64)), (I, dt, idx))[1]   # h0 = H: rested after a charge
 
     def simulate(self, p, prof, T_C, dq=None, full=False):
         """prof: dict(I [A, dis. > 0], dt [s], idx [int into self.dts]) per model step. Returns V [n] (full: V, ||F||,

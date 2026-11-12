@@ -164,7 +164,10 @@ def main():
     ap.add_argument("--jac", default="fd", choices=("fd", "ift"), help="Jacobian: forward differences (fd) or exact, by AD with the IFT (ift)")
     ap.add_argument("--tests", default="hppc", help="fit set: hppc (the three HPPCs) or B (+ full 1C cycles at 0/20/40 C), or a list")
     ap.add_argument("--ocp-p", default=None, help="cathode OCP table (ocp_sub.py json) instead of lm3c")
+    ap.add_argument("--thermal", action="store_true", help="lumped thermal state (LP_THERMAL=1, inherited by the workers)")
     a = ap.parse_args()
+    if a.thermal:
+        os.environ["LP_THERMAL"] = "1"
     if a.ocp_p:
         os.environ["LP_OCP_P"] = os.path.abspath(a.ocp_p)       # inherited by the worker processes
     if a.free:

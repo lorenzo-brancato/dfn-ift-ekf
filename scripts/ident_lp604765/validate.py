@@ -22,7 +22,10 @@ def main():
     ap.add_argument("--fit", default=os.path.join(C.RES, "fit_v1", "best.json"))
     ap.add_argument("--tests", default=",".join(C.ALL))
     ap.add_argument("--ocp-p", default=None, help="cathode OCP table (ocp_sub.py json) instead of lm3c")
+    ap.add_argument("--thermal", action="store_true", help="lumped thermal state (LP_THERMAL=1, inherited by the workers)")
     a = ap.parse_args()
+    if a.thermal:
+        os.environ["LP_THERMAL"] = "1"
     if a.ocp_p:
         os.environ["LP_OCP_P"] = os.path.abspath(a.ocp_p)       # inherited by the worker processes
     out = os.path.dirname(os.path.abspath(a.fit))

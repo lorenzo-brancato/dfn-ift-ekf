@@ -39,7 +39,7 @@ import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 from dfnekf import cellset, datasets  # noqa: E402
 from dfnekf.ekf import EKF, RANGE  # noqa: E402
-from dfnekf.rom import simulate  # noqa: E402
+from dfnekf.rom import simulate, simulate_vdt  # noqa: E402
 from dfnekf.step import DFN  # noqa: E402
 
 TRUE = {"Rf": 1.0, "LAM": 0.0, "Ds": 1.0, "LLI": 0.0}   # the identified (beginning-of-life) values
@@ -96,6 +96,20 @@ def main():
     ap.add_argument("--p0-th", type=float, default=0.3, help="sd of the parameters at t = 0 [fraction of the ageing range]")
     ap.add_argument("--q-th", type=float, default=1e-4,
                     help="parameter random walk [fraction of the ageing range per sqrt(s)]; 1e-4 as experiment.Case")
+    ap.add_argument("--q-shell", type=float, default=0.0,
+                    help="[soc] process noise on the particle mean concentrations: random walk, fraction of c_max per sqrt(s), "
+                         "independent per node (0: none, the model is trusted)")
+    ap.add_argument("--q-q", type=float, default=0.0,
+                    help="[soc] process noise on the cell's charge: random walk of sd q_q [A.h per sqrt(h)] along the "
+                         "lithium-conserving direction (anode and cathode means together); 0: none")
+    ap.add_argument("--soc-vlim", default=None,
+                    help="[soc] V_max,V_min: SOC from the stoichiometry, on the window between the model OCVs V_max and V_min "
+                         "(SOC = (y_0 - y) / (y_0 - y_100), anode (x - x_0) / (x_100 - x_0)); the Coulomb-counting reference is "
+                         "normalised by the same window. Default: the set's window (q_ocv_Ah wide)")
+    ap.add_argument("--soc0", type=float, default=None,
+                    help="[soc] start every run at this SOC (fraction of the window, Q_ref) instead of truth + --soc-err")
+    ap.add_argument("--li-sigma-Ah", type=float, default=None,
+                    help="sd of the lithium pseudo-measurement in A.h of lithium (converted to --li-sigma with the electrode area)")
     ap.add_argument("--li-sigma", type=float, default=None,
                     help="relative sd of the lithium pseudo-measurement (total lithium of the state = the window's); off by default")
     # soc experiment
@@ -117,8 +131,19 @@ def main():
                     help="with --t-input: the temperature rise above the run's 5th percentile is multiplied by this (core vs surface)")
     ap.add_argument("--p-mult", default="", help="multipliers on P after the temperature laws, e.g. De=2,kappa=1.5 (k0 = both k0_n, k0_p)")
     ap.add_argument("--max-hours", type=float, default=None)
+    ap.add_argument("--adaptive", action="store_true",
+                    help="variable step from the --dt grid: a step ends when the current leaves the band of its first sample "
+                         "(|I - I_0| > --adapt-rel |I_0| + --adapt-abs) or after --adapt-max s; model current = the step's mean, "
+                         "measured voltage = its last sample (as lpmodel.prepare)")
+    ap.add_argument("--adapt-max", type=float, default=10.0, help="[s] longest step")
+    ap.add_argument("--adapt-rel", type=float, default=0.05)
+    ap.add_argument("--adapt-abs", type=float, default=0.02, help="[A] floor of the band (rests, end of CV)")
     ap.add_argument("--mask-vmax", type=float, default=None, help="no voltage update while charging at V >= this (late CC, CV) [V]")
     ap.add_argument("--mask-vmin", type=float, default=None, help="no voltage update at V <= this (end-of-discharge knee) [V]")
+    ap.add_argument("--y-every-s", type=float, default=None,
+                    help="voltage update only once per this many seconds (the others: prediction only) [s]")
+    ap.add_argument("--y-burn-s", type=float, default=None,
+                    help="with --y-every-s: voltage update at every sample for the first this many seconds [s]")
     ap.add_argument("--mask-hold-s", type=float, default=300.0, help="the mask-vmin mask is held this long after the voltage recovers [s]")
     ap.add_argument("--grid", default="4:1")
     ap.add_argument("--dims", default=None, help="Nn,Ns,Np,Nm")
@@ -156,6 +181,12 @@ def main():
         gaps = np.diff(t)
         if np.any(np.abs(gaps - dt) > 1e-6):
             print("warning: %d gaps in the %g-s grid (max %.0f s), treated as %g s" % (np.sum(np.abs(gaps - dt) > 1e-6), dt, gaps.max(), dt))
+    dts = None
+    if a.adaptive:
+        d = adaptive_steps(d, dt, a.adapt_max, a.adapt_rel, a.adapt_abs)
+        t, I_np, dts = d["t"], d["I"], d["dts"]
+        print("adaptive: %d steps from %d (mean %.2f s; %d at the %g-s maximum)" % (len(dts), int(round(dts.sum() / dt)), dts.mean(),
+              int(np.sum(dts >= a.adapt_max)), a.adapt_max), flush=True)
     T_K = float(d["T_C"]) + 273.15
     coords = tuple(c for c in a.coords.split(",") if c)
     dims = tuple(int(v) for v in a.dims.split(","))
@@ -194,6 +225,14 @@ def main():
                 if i - last <= hold:
                     mask[i] = True
         print("masked: %.1f %% of the samples" % (100 * mask.mean()), flush=True)
+    if a.y_every_s:
+        # one voltage update per y_every_s seconds: the model error is correlated over minutes, so consecutive samples
+        # are not independent information (the white-noise R would make the filter overconfident in the model)
+        keep = np.r_[True, np.diff(np.floor(t / a.y_every_s)) > 0]
+        if a.y_burn_s:                      # every sample during the burn-in: many small corrections from a wrong start
+            keep |= t <= a.y_burn_s         # instead of one large linearised jump
+        mask |= ~keep
+        print("voltage update every %g s: %.1f %% of the samples used" % (a.y_every_s, 100 * (~mask).mean()), flush=True)
     y_f = np.where(mask, np.nan, y)
     ok = ok & ~mask
     tfac = None
@@ -206,6 +245,9 @@ def main():
 
     # ---- filter
     li_ref = float(m.lithium(m.init_state(*cellset.c0_at(cs, cell, 0.0)), jnp.array([1.0, 1.0, 1.0])))
+    if a.li_sigma_Ah:                      # mol/m2 of electrode -> A.h: x area x F / 3600
+        a.li_sigma = a.li_sigma_Ah / (li_ref * P["area"] * 96485.33212 / 3600.0)
+        print("lithium pseudo-measurement: sd %.2g A.h of %.3f A.h (relative %.3g)" % (a.li_sigma_Ah, li_ref * P["area"] * 96485.33212 / 3600.0, a.li_sigma), flush=True)
     # li_ref: the lithium of the identified beginning-of-life window (x100, y100; any q: x Q_n + y Q_p is constant on it)
     ek = EKF(m, coords=coords, fixed=dict(Rf=1.0, LAM=0.0, Ds=1.0), transform=a.transform, li_sigma=a.li_sigma, li_ref=li_ref)
     nel, nz = m.nel, m.nz
@@ -215,7 +257,7 @@ def main():
     sd_shell = a.p0_shell * np.concatenate([np.full(m.Nn, P["cmax_n"]), np.full(m.Np, P["cmax_p"])])
     sd_rest = np.concatenate([np.full(m.Nm * nel, 1.0), np.full(m.K * nel, 1.0), np.full(m.N, 3.0)])
     R = (a.sigma_mV * 1e-3) ** 2
-    run = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I, jnp.asarray(y_f), tfac=tfac))
+    run = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I, jnp.asarray(y_f), tfac=tfac, dts=dts))
     rows = []
     if a.start == "soc":
         rows = run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w, sd_shell, sd_rest, dt, tag, I, th_true)
@@ -275,17 +317,71 @@ def main():
     pd.DataFrame(rows).to_csv(os.path.join(a.results, "ekf_%s.csv" % tag), index=False)
 
 
+def adaptive_steps(d, dt, max_s, rel, abs_):
+    """Variable steps from a uniform record of step dt: a step starts at sample i and takes the following samples while
+    |I_j - I_i| <= rel |I_i| + abs_ and the step is shorter than max_s; I = the step's mean, V = its last sample, t = the
+    end of the step, T = the mean, valid = all. Returns d with t, I, V, T, valid replaced and dts [s] added."""
+    I, n, L = d["I"], len(d["I"]), int(round(max_s / dt))
+    starts, i = [], 0
+    while i < n:
+        j = i + 1
+        while j < n and j - i < L and abs(I[j] - I[i]) <= rel * abs(I[i]) + abs_:
+            j += 1
+        starts.append((i, j)); i = j
+    out = dict(d)
+    out["t"] = np.array([d["t"][j - 1] for i, j in starts])
+    out["I"] = np.array([I[i:j].mean() for i, j in starts])
+    out["V"] = np.array([d["V"][j - 1] for i, j in starts])
+    out["T"] = np.array([np.mean(d["T"][i:j]) for i, j in starts])
+    out["valid"] = np.array([bool(np.all(d["valid"][i:j])) for i, j in starts])
+    out["dts"] = np.array([(j - i) * dt for i, j in starts])
+    return out
+
+
+def window_lli(cs, cell, vmax, vmin, T_K, dxw, llis=np.linspace(-0.1, 0.6, 141), n=8001):
+    """OCV window between vmax and vmin with the anode stoichiometry lowered by LLI dxw (lithium lost by the anode), on a
+    grid of LLI [anode-window units]. Per LLI: x0, x100, y100, y0 at the window ends and its capacity Q [A.h]."""
+    c = cs["cells"][cell]; tp = cs.get("temperature", {})
+    xn, Un = np.asarray(cs["ocp"]["n"]["x"]), np.asarray(cs["ocp"]["n"]["U"])
+    yp, Up = np.asarray(cs["ocp"]["p"]["y"]), np.asarray(cs["ocp"]["p"]["U"])
+    q = np.linspace(-0.5, 3.0, n)
+    out = {k: [] for k in ("x0", "x100", "y100", "y0", "Q")}
+    for L in llis:
+        x = c["x100"] - L * dxw - q / c["Q_n"]; y = c["y100"] + q / c["Q_p"]
+        U = np.interp(np.clip(y, yp[0], yp[-1]), yp, Up) - np.interp(np.clip(x, xn[0], xn[-1]), xn, Un)
+        if "dUdT0" in tp:
+            U = U + (T_K - cs["T_ref_K"]) * (tp["dUdT0"] + tp.get("dUdT_n", 0.0) * (x - 0.5))
+        ok = (y <= yp[-1]) & (x >= xn[0])
+        qt = q[np.argmax(U <= vmax)]; qb = q[ok][np.where(U[ok] >= vmin)[0][-1]]
+        out["x100"].append(c["x100"] - L * dxw - qt / c["Q_n"]); out["y100"].append(c["y100"] + qt / c["Q_p"])
+        out["x0"].append(c["x100"] - L * dxw - qb / c["Q_n"]); out["y0"].append(c["y100"] + qb / c["Q_p"]); out["Q"].append(qb - qt)
+    return dict(lli=llis, **{k: np.array(v) for k, v in out.items()})
+
+
 def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w, sd_shell, sd_rest, dt, tag, I, th_true):
     """The SOC experiment: open loop and EKF from the wrong starts q0 + err; returns the csv rows."""
     c = cs["cells"][cell]
     P = m.P
-    Q_ref = d.get("meta", {}).get("Q_ref") or float(c.get("q_ocv_Ah", 1.0))
-    q_ref = q0 + np.cumsum(I_np) * dt / 3600.0              # charge below the top after each step [A.h]
-    soc_ref = 1.0 - q_ref / Q_ref
+    # SOC window in charge below the top of the set's window, q in [q_top, q_bot]; electrode stoichiometries at its ends
+    if a.soc_vlim:
+        vmax, vmin = (float(v) for v in a.soc_vlim.split(","))
+        T_K = float(d["T_C"]) + 273.15
+        q_top, q_bot = datasets.q_from_ocv(cs, cell, vmax, T_K), datasets.q_from_ocv(cs, cell, vmin, T_K)
+    else:
+        q_top, q_bot = 0.0, d.get("meta", {}).get("Q_ref") or float(c.get("q_ocv_Ah", 1.0))
+    Q_ref = q_bot - q_top
+    x100w, y100w = c["x100"] - q_top / c["Q_n"], c["y100"] + q_top / c["Q_p"]
+    x0w, y0w = c["x100"] - q_bot / c["Q_n"], c["y100"] + q_bot / c["Q_p"]
+    print("SOC window: q %.3f..%.3f A.h (%.3f A.h); x %.4f..%.4f, y %.4f..%.4f" % (q_top, q_bot, Q_ref, x0w, x100w, y100w, y0w), flush=True)
+    q_ref = q0 + np.cumsum(I_np * d.get("dts", dt)) / 3600.0   # charge below the top after each step [A.h]
+    soc_ref = (q_bot - q_ref) / Q_ref                          # reference: Coulomb counting on the same window
     errs = [float(e) for e in a.soc_err.split(",")]
+    if a.soc0 is not None:                  # absolute start at soc0 of the window
+        errs = [q_bot - a.soc0 * Q_ref - q0]
+        print("start at SOC %.0f %%: error %+.3f A.h against the reference start" % (100 * a.soc0, errs[0]), flush=True)
     rows = []
     if not a.no_openloop:
-        sim = jax.jit(lambda z0: simulate(m, z0, I, th_true, k=None)["V"])
+        sim = jax.jit(lambda z0: simulate(m, z0, I, th_true, k=None)["V"]) if "dts" not in d else             jax.jit(lambda z0: simulate_vdt(m, z0, I, d["dts"], th_true))
         for e in errs:
             t0 = time.time()
             Vo = np.asarray(sim(jnp.asarray(z_of(q0 + e))))
@@ -302,16 +398,43 @@ def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w,
     Pz = np.diag(np.r_[sd_shell, sd_rest] ** 2)
     Pz += a.p0_q ** 2 * np.outer(v, v)
     P0 = np.zeros((ek.n, ek.n)); P0[:nz, :nz] = Pz; P0[nz:, nz:] = np.diag(p0_th ** 2)
-    Qd = np.r_[np.zeros(nz), a.q_th * rng_w * np.sqrt(dt) / dc]
+    qz = np.zeros(nz)
+    qz[:m.Nn] = a.q_shell * P["cmax_n"] * np.sqrt(dt); qz[m.Nn:nel] = a.q_shell * P["cmax_p"] * np.sqrt(dt)
+    Qd = np.r_[qz, a.q_th * rng_w * np.sqrt(dt) / dc]
+    if a.q_q > 0:
+        # random walk on the cell's charge along the lithium-conserving direction v (all anode means move together, all
+        # cathode means opposite): SOC uncertainty without roughening the particle profiles. sd q_q A.h per sqrt(h).
+        Qm = np.diag(Qd ** 2)
+        Qm[:nz, :nz] += (a.q_q ** 2 * dt / 3600.0) * np.outer(v, v)
+        Qd = Qm
     for e in errs:
         x0 = np.r_[z_of(q0 + e), c0]
         t0 = time.time()
         H = {k: np.asarray(vv) for k, vv in run(jnp.asarray(x0), jnp.asarray(P0), jnp.asarray(Qd)).items()}
         wall = time.time() - t0
-        q_p = (H["ybar"] - c["y100"]) * c["Q_p"]; q_n = (c["x100"] - H["xbar"]) * c["Q_n"]
-        soc_p, soc_n = 1 - q_p / Q_ref, 1 - q_n / Q_ref
-        sd_soc = H["sd_ybar"] * c["Q_p"] / Q_ref
-        es = 100 * (soc_p - soc_ref)
+        extra = {}
+        if "LLI" in coords and a.soc_vlim:
+            # LLI moves the anode stoichiometry the model sees (x_eff = x - LLI dx_window_n): the OCV window ends at V_max /
+            # V_min and the window capacity move with it. SOC on the moved window; SOH = Q_window(LLI) / Q_window(0).
+            il = list(coords).index("LLI"); lli = H["vals"][:, il]; sd_lli = H["sd_vals"][:, il]; dxw = P["dx_window_n"]
+            W = window_lli(cs, cell, vmax, vmin, T_K, dxw)
+            xw0, xw1, yw1, yw0, Qw = (np.interp(lli, W["lli"], W[k]) for k in ("x0", "x100", "y100", "y0", "Q"))
+            x_eff = H["xbar"] - lli * dxw
+            soc_p = (yw0 - H["ybar"]) / (yw0 - yw1); soc_n = (x_eff - xw0) / (xw1 - xw0)
+            sd_soc = 0.5 * (H["sd_xbar"] / (xw1 - xw0) + H["sd_ybar"] / (yw0 - yw1))
+            Q0w = float(np.interp(0.0, W["lli"], W["Q"])); dQ = np.gradient(W["Q"], W["lli"])
+            soh = Qw / Q0w; sd_soh = np.abs(np.interp(lli, W["lli"], dQ)) * sd_lli / Q0w
+            extra = dict(soh=soh, sd_soh=sd_soh, lli_Ah=lli * dxw * c["Q_n"], Q_window_Ah=Qw, Q_window0_Ah=Q0w)
+            if a.dataset == "exp_LP604765":     # SOH on the nominal capacity (the only place it appears)
+                extra.update(soh_nom=Qw / datasets.LP_Q_NOMINAL, sd_soh_nom=sd_soh * Q0w / datasets.LP_Q_NOMINAL)
+            print("SOH (OCV window %g-%g V): %.2f %% of BOL at the end, sd %.2f %%; LLI %.0f mAh; window %.3f A.h" % (vmax, vmin, 100 * soh[-1], 100 * sd_soh[-1],
+                  1e3 * extra["lli_Ah"][-1], Qw[-1]), flush=True)
+        else:
+            soc_p = (y0w - H["ybar"]) / (y0w - y100w)                  # SOC from the stoichiometry of each electrode
+            soc_n = (H["xbar"] - x0w) / (x100w - x0w)
+            sd_soc = 0.5 * (H["sd_xbar"] / (x100w - x0w) + H["sd_ybar"] / (y0w - y100w))   # bound: fully correlated electrodes
+        soc = 0.5 * (soc_n + soc_p)                                 # the cell's SOC: mean of the two electrodes
+        es = 100 * (soc - soc_ref)
         k10 = np.argmax(np.abs(es) < 2.0) if np.any(np.abs(es) < 2.0) else -1
         settle = np.where(np.abs(es) >= 2.0)[0]
         t_set = float(t[settle[-1]] if len(settle) and settle[-1] < len(t) - 1 else (np.nan if len(settle) else 0.0))
@@ -330,9 +453,23 @@ def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w,
         rows.append(row)
         print(json.dumps({k: (round(vv, 4) if isinstance(vv, float) else vv) for k, vv in row.items()}))
         np.savez(os.path.join(a.results, "ekf_%s_e%+.2f.npz" % (tag, e)), t=t, I=I_np, y=y, V=H["V"], innov=H["innov"],
-                 Sy=H["Sy"], soc_p=soc_p, soc_n=soc_n, sd_soc=sd_soc, soc_ref=soc_ref, vals=H["vals"], sd_vals=H["sd_vals"],
-                 coords=np.array(coords), resF=H["resF"], q0=q0, err=e, sigma_mV=a.sigma_mV)
+                 Sy=H["Sy"], soc=soc, soc_p=soc_p, soc_n=soc_n, sd_soc=sd_soc, soc_ref=soc_ref, vals=H["vals"], sd_vals=H["sd_vals"],
+                 coords=np.array(coords), resF=H["resF"], q0=q0, err=e, posdef=H["posdef"], minDiagP=H["minDiagP"],
+                 ce_min=H["ce_min"], step_finite=H["finite"], li_rel=H["li_rel"], eta=H["eta"], sigma_mV=a.sigma_mV, soc_window=np.array([x0w, x100w, y100w, y0w]), cap_1C_t=d.get("meta", {}).get("cap_1C", (np.zeros(0), np.zeros(0)))[0], cap_1C=d.get("meta", {}).get("cap_1C", (np.zeros(0), np.zeros(0)))[1], **extra,
+                 **anode_profile(m, H, coords))
     return rows
+
+
+def anode_profile(m, H, coords):
+    """Along the anode, from the closure solution g of each step (at the predicted state): x of the cell centres [m],
+    phi_s - phi_e [V] and the plating potential phi_s - phi_e - R_f j_n [V vs Li/Li+] (step.DFN.interface, per node)."""
+    A_ = m.A; Nn, Np, N = m.Nn, m.Np, m.N
+    g = np.asarray(H["g"])
+    jn = g[:, :Nn]; pe = g[:, Nn + Np:Nn + Np + N][:, :Nn]; sn = g[:, Nn + Np + N:2 * Nn + Np + N]
+    th = np.asarray(H["vals"])[:, list(coords).index("Rf")] if "Rf" in coords else np.ones(len(g))   # R_f multiplier (fixed: 1)
+    Rf = m.P["Rf0"] * th[:, None]
+    dxn = np.asarray(A_.dxn)
+    return dict(x_n=np.cumsum(dxn) - 0.5 * dxn, dphi_n=sn - pe, phi_pl_n=sn - pe - Rf * jn, j_n=jn)
 
 
 def plot_params(a, t, vals, sd, tv, coords, H, ok, cell, test, seed, row, tag):

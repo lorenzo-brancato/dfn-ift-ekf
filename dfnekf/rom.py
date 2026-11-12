@@ -34,6 +34,36 @@ def simulate(m: DFN, z0, Iseq, th, k=2, converged_first=True):
     return out
 
 
+def simulate_vdt(m: DFN, z0, Iseq, dts, th, dt_set=None):
+    """Open loop as simulate(k=None) with a variable step: dts [s] per step, each in dt_set (default the integers
+    1..max(dts)). The electrolyte maps come from a table per step length; the particle constants use the step's dt."""
+    dts = np.asarray(dts, float)
+    dt_set = tuple(float(v) for v in (dt_set if dt_set is not None else range(1, int(round(dts.max())) + 1)))
+    idx = jnp.asarray(np.array([dt_set.index(float(v)) for v in dts]))
+    EG = [m.elec_mats(th, d) for d in dt_set]
+    Et = jnp.stack([e for e, _ in EG]); Gt = jnp.stack([g for _, g in EG])
+    Iseq = jnp.asarray(Iseq); A_ = m.A
+    csn0, csp0, _ = m.surf(z0)
+    g0 = A_.newton(A_.guess(csn0, csp0, Iseq[0], th), csn0, csp0, z0[m.sl["e"]], Iseq[0], th)[0]
+
+    def body(carry, xs):
+        z, g = carry
+        I, dtk, k = xs
+        consts = m.part_consts(th, dtk); em = (Et[k], Gt[k])
+        csn, csp, ce = m.surf(z)
+        dt0 = m.dt; m.dt = dtk                               # cathode D_p(y) constants inside imp_coeffs / advance
+        try:
+            imp = m.imp_coeffs(z, th, consts, em)
+            g, _, _ = A_.solve_robust(g, csn, csp, ce, I, th, tol=1e-10, imp=imp)
+            V = A_.V_of(g, I, csn, csp)
+            z2 = m.advance(z, g, th, consts, em)
+        finally:
+            m.dt = dt0
+        return (z2, g), V
+    _, V = jax.lax.scan(body, (z0, g0), (Iseq, jnp.asarray(dts), idx))
+    return V
+
+
 def simulate_nn(m: DFN, net, z0, Iseq, th, kN=0):
     """Closed loop with the neural closure. kN = number of correcting Newton steps (0 = k=0). net(csn,csp,ce,I,th) -> j [20]."""
     Iseq = jnp.asarray(Iseq)

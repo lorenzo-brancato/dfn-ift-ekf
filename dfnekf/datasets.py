@@ -46,7 +46,8 @@ def names():
 # ---------------------------------------------------------------- LP604765 (CNR STEMS, BATTAGE)
 LP_RAW = root("exp_LP604765", "raw", "01. Electric Characterization", "01. ID01")
 LP_CELL = "LP01"
-LP_Q_REF = 1.95          # [A.h] window width of the identification (SOC = 1 - q / 1.95 A.h)
+LP_Q_NOMINAL = 2.133     # [A.h] nominal capacity (C/20 to 3.0 V, fresh cell): SOC = 1 - q / 2.133 A.h, q removed since full
+LP_Q_REF = LP_Q_NOMINAL  # SOC reference of the EKF scripts (was 1.95 A.h, the 1C-usable window of ID01, until 2026-11-10)
 # FIT: the three HPPCs (from the first pulse, after the 1 h rest at the top of charge); dq = start below the top
 # (dq_20 = 0 by definition of the window, dq_00 / dq_40 fitted). VAL: held out, placed by OCV inversion (dq = "ocv").
 LP_FIT = {
@@ -88,6 +89,23 @@ LP_TESTS = {**LP_FIT, **LP_VAL, **LP_AGE, **LP_FIT_B, **LP_VAL_B}
 # capacity checks at 20 C: mean 1C discharge capacity of the three CC-CV / 1 h rest / 1C cycles [A.h] (survey.py)
 LP_CAPCHECK = {"2026-10-09": 1.894, "2026-10-17": 1.934, "2026-10-18": 1.930, "2026-10-26": 1.922,
                "2026-10-29": 1.881, "2026-11-02": 1.794}
+
+
+# slow discharge of a FRESH LP604765 (another cell of the same type, not ID01), recorded with the user's BLE board
+# (INA228, cell thermistor), 2026-11-09/10, about 25-28 C: C/20 top-up charge, 45 min rest, C/20 discharge (0.0964 A,
+# 22.6 h) to the board's 3.0 V cut-off. Delivered 2.133 Ah: the nominal capacity of the type, according to the user.
+LP_C20_FILE = root("exp_LP604765", "raw", "01. Electric Characterization", "c_20_discahrge", "ble_20261110_152349.csv")
+
+
+def lp_c20(file=LP_C20_FILE):
+    """The C/20 recording: t [s], V [V], I [A, > 0 on discharge], T [C], and the indices of the discharge and the rest."""
+    import pandas as pd
+    d = pd.read_csv(file, usecols=["t_s", "V", "I", "T_cell_C"])
+    t, V, I, T = (d[k].values.astype(float) for k in ("t_s", "V", "I", "T_cell_C"))
+    dis = I > 0.05
+    i0 = int(np.argmax(dis))
+    ch_end = int(np.flatnonzero(I < -0.05)[-1]) if np.any(I < -0.05) else 0
+    return dict(t=t - t[0], V=V, I=I, T=T, i_dis=i0, i_rest=(ch_end + 1, i0), file=file)
 
 
 def lp_discharge_capacities(t, I, i_min=0.5, min_s=600.0):

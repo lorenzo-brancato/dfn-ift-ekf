@@ -41,6 +41,7 @@ class EKF:
         self.jitter, self.tol_lin = jitter, tol_lin
         self.S = Struct(m)
         E1, G1 = m.elec_mats(jnp.array([1.0, 1.0, 1.0])); self.E1, self.G1 = E1, G1
+        self._em_cur = None                         # variable step (run(..., dts=)): the step's (E, G) from the table
         self.qz_alpha, self.qz_mask, self.qz_unit, self.sigF, self.qz_cap = qz_alpha, qz_mask, qz_unit, sigF, qz_cap
         self.lo = jnp.array([LOGIT[c][0] for c in self.coords]); self.hi = jnp.array([LOGIT[c][1] for c in self.coords])
         self.logm = jnp.array([c in ("Rf", "Ds") for c in self.coords])              # 'free': log coordinates
@@ -84,7 +85,13 @@ class EKF:
         p = (vals - np.asarray(self.lo)) / (np.asarray(self.hi) - np.asarray(self.lo)); return np.log(p / (1 - p))
 
     def em_of(self, th):
-        return self.E1, self.G1.at[:, :self.m.Nn].multiply(th[1])
+        E1, G1 = (self.E1, self.G1) if self._em_cur is None else self._em_cur
+        return E1, G1.at[:, :self.m.Nn].multiply(th[1])
+
+    def dt_table(self, dt_set):
+        """Electrolyte step maps (E, G) at theta = 1 for each step length of dt_set [s], stacked [k, ...]."""
+        EG = [self.m.elec_mats(jnp.array([1.0, 1.0, 1.0]), float(d)) for d in dt_set]
+        return jnp.stack([e for e, _ in EG]), jnp.stack([g for _, g in EG])
 
     # --- step and linearization
     def f_and_lin(self, x, I, g_prev, tf=None):
@@ -168,14 +175,19 @@ class EKF:
         Vt = jnp.concatenate([Cj, Esel, Lsel], 0)
         return U, Vt
 
-    def make_step(self, x0, P0_diag, Q_diag, R, nees=False, scale=None, temp=False):
-        """temp: the scan inputs carry a third entry, the factor tf on theta[2] (f_and_lin); x_true then comes fourth."""
+    def make_step(self, x0, P0_diag, Q_diag, R, nees=False, scale=None, temp=False, table=None):
+        """temp: the scan inputs carry the factor tf on theta[2] (f_and_lin) after (I, y).
+        table: (E [k, N, N], G [k, N, n]) of dt_table; the inputs then also carry the step length dt_k [s] and its row k
+        (after tf); the particle constants use dt_k, the electrolyte the row, and the process noise Q_diag (a random walk,
+        given for the model's own step m.dt) scales in variance with dt_k / m.dt. x_true comes last."""
         nz, n, nth, S, m = self.nz, self.n, self.nth, self.S, self.m
         if scale is None:
             nel = m.nel
             scale = jnp.asarray(np.concatenate([np.full(nel, 1000.0), np.full(m.Nm * nel, 100.0), np.full(m.K * nel, 100.0), np.full(m.N, 100.0), np.full(nth, 0.5)]))
         x0 = jnp.asarray(x0); nj = m.nel; ie = S.ie
-        Q0 = (jnp.asarray(Q_diag) / scale) ** 2; P0 = jnp.diag((jnp.asarray(P0_diag) / scale) ** 2)
+        Qa = jnp.asarray(Q_diag)                       # sd per step (1-D) or a full covariance per step (2-D), physical units
+        Q0 = jnp.diag((Qa / scale) ** 2) if Qa.ndim == 1 else Qa / jnp.outer(scale, scale)
+        P0 = jnp.diag((jnp.asarray(P0_diag) / scale) ** 2)
         # electrode-mean stoichiometries (volume-weighted particle means) and their sd, for SOC / capacity read-outs
         A_ = m.A
         w_n = jnp.zeros(n).at[jnp.asarray(S.ic[:m.Nn])].set(jnp.asarray(A_.dxn) / (m.P["Ln"] * m.P["cmax_n"])) * scale
@@ -190,11 +202,26 @@ class EKF:
         def lam_right(M, dvec, E):
             return jnp.concatenate([M[:, :S.nzp] * dvec[None, :], M[:, ie] @ E.T, M[:, S.nzp + m.N:]], 1)
 
+        dt0 = m.dt
+        i_tf = 2 if temp else None
+        i_dt = 2 + int(temp)
+        i_true = 2 + int(temp) + 2 * int(table is not None)
+
         def step(carry, inp):
+            if table is None:
+                return step_(carry, inp, Q0)
+            dtk, kk = inp[i_dt], inp[i_dt + 1]
+            m.dt = dtk; self._em_cur = (table[0][kk], table[1][kk])        # traced once: every m.* default uses dt_k
+            try:
+                return step_(carry, inp, Q0 * (dtk / dt0))                  # random walks: variance ~ dt
+            finally:
+                m.dt = dt0; self._em_cur = None
+
+        def step_(carry, inp, Q0):
             u, P, g_prev = carry
             I, yk = inp[0], inp[1]
             x = x0 + u * scale
-            L = self.f_and_lin(x, I, g_prev, inp[2] if temp else None)
+            L = self.f_and_lin(x, I, g_prev, inp[i_tf] if temp else None)
             U, Vt = self.lowrank(L)                                                          # n x r, r x n
             h = jnp.concatenate([L["C"][nj], L["Cth"][nj]])
             f_u = (L["f"] - x0) / scale
@@ -224,18 +251,18 @@ class EKF:
             t4 = (Us @ (Vts @ PV)) @ Us.T
             Qd = Q0
             if self.qz_alpha > 0:
-                Qd = Q0 + self.qz_alpha * jnp.minimum((L["res"] / self.sigF) ** 2, self.qz_cap) * (qmask * qunit ** 2)
-            Pn = t1 + t2 + t2.T + t4 + jnp.diag(Qd)
+                Qd = Q0 + jnp.diag(self.qz_alpha * jnp.minimum((L["res"] / self.sigF) ** 2, self.qz_cap) * (qmask * qunit ** 2))
+            Pn = t1 + t2 + t2.T + t4 + Qd
             Pn = 0.5 * (Pn + Pn.T)
             c_up = x0[nz:] + scale[nz:] * u_up[nz:]
             vals = self.val_of(c_up)
             sd_c = jnp.sqrt(jnp.diag(Pp)[nz:]) * scale[nz:]
             xb = w_n @ (x0 / scale + u_up); yb = w_p @ (x0 / scale + u_up)
-            out = dict(li_rel=li_of(u_up) / Li0 - 1.0, li_innov_rel=li_innov / Li0, xbar=xb, ybar=yb, sd_xbar=jnp.sqrt(w_n @ Pp @ w_n), sd_ybar=jnp.sqrt(w_p @ Pp @ w_p),
+            out = dict(g=L["g"], li_rel=li_of(u_up) / Li0 - 1.0, li_innov_rel=li_innov / Li0, xbar=xb, ybar=yb, sd_xbar=jnp.sqrt(w_n @ Pp @ w_n), sd_ybar=jnp.sqrt(w_p @ Pp @ w_p),
                        vals=vals, sd_vals=self.dval_dc(c_up) * sd_c, sd_c=sd_c, c=c_up, innov=innov, Sy=jnp.sqrt(Sy), V=L["V"], resF=L["res"], eta=L["eta"], ppl=L["ppl"], ce_min=L["ce_min"], li=L["li"], need=L["need"],
                        minDiagP=jnp.min(jnp.diag(Pp)), finite=jnp.all(jnp.isfinite(u_up)), posdef=jnp.all(jnp.isfinite(jnp.linalg.cholesky(Pp[nz:, nz:]))))
             if nees:
-                e = u_up[nz:] - inp[3 if temp else 2][nz:]
+                e = u_up[nz:] - inp[i_true][nz:]
                 out["nees"] = e @ jnp.linalg.solve(Pp[nz:, nz:], e)
                 i2 = [i for i, c_ in enumerate(self.coords) if c_ in ("Rf", "Ds")]
                 if len(i2) == 2:
@@ -251,19 +278,26 @@ class EKF:
         imp = m.imp_coeffs(z0, th, None, self.em_of(th))
         return m.A.newton(m.A.guess(csn, csp, I0, th), csn, csp, ce, I0, th, tol=1e-10, imp=imp)[0]
 
-    def run(self, x0, P0d, Qd, R, Iseq, y, x_true=None, tfac=None):
+    def run(self, x0, P0d, Qd, R, Iseq, y, x_true=None, tfac=None, dts=None, dt_set=None):
         """tfac: optional per-step factor on theta[2] (see f_and_lin), same length as Iseq.
+        dts: optional per-step lengths [s] (variable step; each must be in dt_set, default the integers 1..max(dts)).
         y: measured voltage; NaN entries are masked samples (prediction only; the lithium pseudo-measurement still applies).
         P0d: the initial standard deviations (1-D, physical units), or a full initial covariance (2-D, n x n, physical units)."""
         temp = tfac is not None
         full = np.ndim(P0d) == 2
-        step, scale = self.make_step(x0, np.ones(self.n) if full else P0d, Qd, R, nees=x_true is not None, temp=temp)
+        table = None
+        if dts is not None:
+            dts_np = np.asarray(dts, float)
+            dt_set = tuple(float(v) for v in (dt_set if dt_set is not None else range(1, int(round(dts_np.max())) + 1)))
+            idx = np.array([dt_set.index(float(v)) for v in dts_np])
+            table = self.dt_table(dt_set)
+        step, scale = self.make_step(x0, np.ones(self.n) if full else P0d, Qd, R, nees=x_true is not None, temp=temp, table=table)
         x0 = jnp.asarray(x0); Iseq = jnp.asarray(Iseq)
         th0 = self.th_of(x0[self.nz:])
         if temp:
             th0 = th0.at[2].multiply(jnp.asarray(tfac)[0])
         g0 = self.init_g(x0[:self.nz], Iseq[0], th0, x0[self.nz:])
-        inp = (Iseq, jnp.asarray(y)) + ((jnp.asarray(tfac),) if temp else ()) + (() if x_true is None else ((jnp.asarray(x_true) - x0) / scale,))
+        inp = (Iseq, jnp.asarray(y)) + ((jnp.asarray(tfac),) if temp else ())             + ((jnp.asarray(dts_np), jnp.asarray(idx)) if table is not None else ())             + (() if x_true is None else ((jnp.asarray(x_true) - x0) / scale,))
         n = self.n
         P0 = jnp.asarray(P0d) / jnp.outer(scale, scale) if full else jnp.diag((jnp.asarray(P0d) / scale) ** 2)
         (uT, PT, gT), H = jax.lax.scan(step, (jnp.zeros(n), P0, g0), inp)
