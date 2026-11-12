@@ -14,9 +14,9 @@ from .structjac import Struct
 from .ageing import DX_N
 
 
-LOGIT = {"Rf": (0.5, 12.0), "LAM": (-0.05, 0.4), "Ds": (0.15, 1.3), "LLI": (-0.05, 0.3)}       # logit range (widened), BRIEF v4 §2.3
-RANGE = {"Rf": (1.0, 10.0), "LAM": (0.0, 0.3), "Ds": (0.3, 1.0), "LLI": (0.0, 0.2)}          # ageing range
-IDX = {"Rf": 0, "LAM": 1, "Ds": 2, "LLI": 3}
+LOGIT = {"Rf": (0.5, 12.0), "LAM": (-0.05, 0.4), "Ds": (0.15, 1.3), "LLI": (-0.05, 0.3), "Vb": (-0.2, 0.2)}       # logit range (widened), BRIEF v4 §2.3
+RANGE = {"Rf": (1.0, 10.0), "LAM": (0.0, 0.3), "Ds": (0.3, 1.0), "LLI": (0.0, 0.2), "Vb": (-0.05, 0.05)}          # ageing range
+IDX = {"Rf": 0, "LAM": 1, "Ds": 2, "LLI": 3, "Vb": 4}
 
 
 def range_width(c): return RANGE[c][1] - RANGE[c][0]
@@ -39,13 +39,17 @@ class EKF:
         self.fixed = dict(Rf=1.0, LAM=0.0, Ds=1.0); self.fixed.update(fixed or {})
         self.nth = len(self.coords); self.nz = m.nz; self.n = m.nz + self.nth
         self.jitter, self.tol_lin = jitter, tol_lin
+        self.keep_x = False                 # also return the updated state x of every step (memory: steps x n)
+        self.innov_clip = None              # [V] limit on the innovation used for the state update (None: off)
         self.S = Struct(m)
         E1, G1 = m.elec_mats(jnp.array([1.0, 1.0, 1.0])); self.E1, self.G1 = E1, G1
         self._em_cur = None                         # variable step (run(..., dts=)): the step's (E, G) from the table
         self.qz_alpha, self.qz_mask, self.qz_unit, self.sigF, self.qz_cap = qz_alpha, qz_mask, qz_unit, sigF, qz_cap
         self.lo = jnp.array([LOGIT[c][0] for c in self.coords]); self.hi = jnp.array([LOGIT[c][1] for c in self.coords])
         self.logm = jnp.array([c in ("Rf", "Ds") for c in self.coords])              # 'free': log coordinates
-        self.th_idx = [IDX[c] for c in self.coords if c in IDX and c != "LLI"]
+        self.th_idx = [IDX[c] for c in self.coords if c in IDX and c not in ("LLI", "Vb")]
+        # Vb: an additive voltage bias [V] (random walk): V = V_model + Vb, absorbs the slowly varying model-plant mismatch
+        self.i_vb = self.coords.index("Vb") if "Vb" in self.coords else None
         self.sign = jnp.array([-1.0 if c == "LAM" else 1.0 for c in self.coords])
         # LLI (cell sets): a constant offset of the anode means the closure sees, in units of the anode window
         # (P["dx_window_n"] c_max,n; the paper's LLIEKF uses DX_N of Chen2020): z_eff = z - LLI dx c_max,n on c_avg,n
@@ -67,7 +71,7 @@ class EKF:
     def th_of(self, c):
         v = self.val_of(c); th = jnp.array([self.fixed["Rf"], 1.0 - self.fixed["LAM"], self.fixed["Ds"]])
         for i, name in enumerate(self.coords):
-            if name == "LLI":
+            if name in ("LLI", "Vb"):
                 continue
             th = th.at[IDX[name]].set(v[i] if name != "LAM" else 1.0 - v[i])
         return th
@@ -131,6 +135,8 @@ class EKF:
             g, res = A_.newton_fixed(g, csn, csp, ce_, I, th, k=1)
             g = jax.lax.cond(res > self.tol_lin, lambda g_: A_.newton(g_, csn, csp, ce_, I, th, tol=1e-10)[0], lambda g_: g_, g); gl = g
         V = A_.V_of(g, I, csn, csp)
+        if self.i_vb is not None:
+            V = V + self.val_of(c)[self.i_vb]
         z2 = m.advance(z_adv, g, th, consts, em)
         eta, ppl = m.interface(g, csn, th)
         dvec, E, Bm = S.lam_B(th, em, z)
@@ -146,8 +152,10 @@ class EKF:
         dv = self.dval_dc(c) * self.sign                                    # dtheta_full[idx]/dc
         if tf is not None and "Ds" in self.coords:                          # theta[2] = Ds * tf
             dv = dv.at[self.coords.index("Ds")].multiply(tf)
-        ith = [i for i, nme in enumerate(self.coords) if nme != "LLI"]
+        ith = [i for i, nme in enumerate(self.coords) if nme not in ("LLI", "Vb")]
         Cth = jnp.zeros((C.shape[0], self.nth)).at[:, jnp.array(ith, dtype=int)].set(Sth[:, self.th_idx] * dv[jnp.array(ith, dtype=int)][None, :])
+        if self.i_vb is not None:                                           # dV/dVb = 1 (the fluxes do not depend on it)
+            Cth = Cth.at[nj, self.i_vb].set(dv[self.i_vb])
         if self.i_lli is not None:                                          # d(j, V)/dLLI through the anode means the closure sees
             Cth = Cth.at[:, self.i_lli].set(-self.dshift * jnp.sum(C[:, :m.Nn], axis=1) * dv[self.i_lli])
         # direct dependence of Lambda, B (D_s) and G (a_s) on the coordinates: one tangent per coordinate with a direct effect
@@ -229,7 +237,8 @@ class EKF:
             Ph = P @ hs; Sy = hs @ Ph + R; K = Ph / Sy
             innov = yk - L["V"]
             ok_y = jnp.isfinite(yk)                                                          # y = NaN: no voltage update (masked sample)
-            K = jnp.where(ok_y, K, 0.0); du = K * jnp.where(ok_y, innov, 0.0)
+            innov_u = innov if self.innov_clip is None else jnp.clip(innov, -self.innov_clip, self.innov_clip)   # large first corrections in steps
+            K = jnp.where(ok_y, K, 0.0); du = K * jnp.where(ok_y, innov_u, 0.0)
             M_ = P - jnp.outer(K, Ph)
             Pp = M_ - jnp.outer(M_ @ hs, K) + R * jnp.outer(K, K)
             Pp = 0.5 * (Pp + Pp.T) + self.jitter * jnp.eye(n)
@@ -261,6 +270,8 @@ class EKF:
             out = dict(g=L["g"], li_rel=li_of(u_up) / Li0 - 1.0, li_innov_rel=li_innov / Li0, xbar=xb, ybar=yb, sd_xbar=jnp.sqrt(w_n @ Pp @ w_n), sd_ybar=jnp.sqrt(w_p @ Pp @ w_p),
                        vals=vals, sd_vals=self.dval_dc(c_up) * sd_c, sd_c=sd_c, c=c_up, innov=innov, Sy=jnp.sqrt(Sy), V=L["V"], resF=L["res"], eta=L["eta"], ppl=L["ppl"], ce_min=L["ce_min"], li=L["li"], need=L["need"],
                        minDiagP=jnp.min(jnp.diag(Pp)), finite=jnp.all(jnp.isfinite(u_up)), posdef=jnp.all(jnp.isfinite(jnp.linalg.cholesky(Pp[nz:, nz:]))))
+            if self.keep_x:
+                out["x"] = x0 + u_up * scale
             if nees:
                 e = u_up[nz:] - inp[i_true][nz:]
                 out["nees"] = e @ jnp.linalg.solve(Pp[nz:, nz:], e)
@@ -301,6 +312,9 @@ class EKF:
         n = self.n
         P0 = jnp.asarray(P0d) / jnp.outer(scale, scale) if full else jnp.diag((jnp.asarray(P0d) / scale) ** 2)
         (uT, PT, gT), H = jax.lax.scan(step, (jnp.zeros(n), P0, g0), inp)
+        H = dict(H)
+        H["x_end"] = x0 + uT * scale                   # predicted state and covariance after the last input (physical
+        H["P_end"] = PT * jnp.outer(scale, scale)      # units): a later run can continue from them
         return H
 
 

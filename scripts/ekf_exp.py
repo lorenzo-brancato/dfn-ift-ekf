@@ -42,7 +42,7 @@ from dfnekf.ekf import EKF, RANGE  # noqa: E402
 from dfnekf.rom import simulate, simulate_vdt  # noqa: E402
 from dfnekf.step import DFN  # noqa: E402
 
-TRUE = {"Rf": 1.0, "LAM": 0.0, "Ds": 1.0, "LLI": 0.0}   # the identified (beginning-of-life) values
+TRUE = {"Rf": 1.0, "LAM": 0.0, "Ds": 1.0, "LLI": 0.0, "Vb": 0.0}   # the identified (beginning-of-life) values; Vb: voltage bias [V]
 
 # per-dataset defaults (any of them can be overridden on the command line)
 DEFAULTS = {
@@ -119,7 +119,7 @@ def main():
     # params experiment
     ap.add_argument("--seeds", default="0,1,2", help="[params] seeds of the initial parameter offsets (-1: start at --init)")
     ap.add_argument("--offset", type=float, default=0.4, help="[params] initial parameter offset, fraction of the ageing range")
-    ap.add_argument("--init", default="", help="[params] initial values overriding the identified ones, e.g. Ds=2 (seed -1 starts there)")
+    ap.add_argument("--init", default="", help="initial parameter values overriding the identified ones, e.g. Ds=2 ([params] seed -1 starts there; [soc] the start of every run)")
     ap.add_argument("--p0-coord", default="", help="[params] prior sd in filter coordinates (log for Rf, Ds), e.g. Ds=1.0: overrides --p0-th")
     # model
     ap.add_argument("--ea-dp", type=float, default=None, help="cathode diffusion activation energy [J/mol] overriding the set's")
@@ -142,6 +142,17 @@ def main():
     ap.add_argument("--mask-vmin", type=float, default=None, help="no voltage update at V <= this (end-of-discharge knee) [V]")
     ap.add_argument("--y-every-s", type=float, default=None,
                     help="voltage update only once per this many seconds (the others: prediction only) [s]")
+    ap.add_argument("--innov-clip-mV", type=float, default=None, help="innovation used for the state update clipped to +-this [mV]")
+    ap.add_argument("--p0-vb-mV", type=float, default=20.0, help="prior sd of the voltage bias Vb (coords ... ,Vb) [mV]")
+    ap.add_argument("--q-vb-mV", type=float, default=0.5, help="random walk of the voltage bias [mV per sqrt(s)]")
+    ap.add_argument("--hold-vb", action="store_true", help="with --th-hold-s: hold the voltage bias too (default: free)")
+    ap.add_argument("--th-hold-s", type=float, default=None,
+                    help="[soc] parameters (Rf, LLI) held at their prior values for the first this many seconds (SOC only), then released")
+    ap.add_argument("--p0-th-release", type=float, default=1.0, help="[soc] with --th-hold-s: prior sd at the release, x the --p0-th one")
+    ap.add_argument("--headroom-every-s", type=float, default=None,
+                    help="[soc] charging headroom (current at which the anode LDP reaches 0 V) from the EKF state every this many s")
+    ap.add_argument("--headroom-imax", type=float, default=6.0, help="[A] largest charging current of the headroom sweep")
+    ap.add_argument("--headroom-horizon-s", type=float, default=300.0, help="[s] constant-current charge simulated from each state")
     ap.add_argument("--y-burn-s", type=float, default=None,
                     help="with --y-every-s: voltage update at every sample for the first this many seconds [s]")
     ap.add_argument("--mask-hold-s", type=float, default=300.0, help="the mask-vmin mask is held this long after the voltage recovers [s]")
@@ -250,6 +261,8 @@ def main():
         print("lithium pseudo-measurement: sd %.2g A.h of %.3f A.h (relative %.3g)" % (a.li_sigma_Ah, li_ref * P["area"] * 96485.33212 / 3600.0, a.li_sigma), flush=True)
     # li_ref: the lithium of the identified beginning-of-life window (x100, y100; any q: x Q_n + y Q_p is constant on it)
     ek = EKF(m, coords=coords, fixed=dict(Rf=1.0, LAM=0.0, Ds=1.0), transform=a.transform, li_sigma=a.li_sigma, li_ref=li_ref)
+    ek.keep_x = bool(a.headroom_every_s)    # the states are needed for the charging headroom
+    ek.innov_clip = None if a.innov_clip_mV is None else a.innov_clip_mV * 1e-3
     nel, nz = m.nel, m.nz
     rng_w = np.array([RANGE[c][1] - RANGE[c][0] for c in coords])
     lo = np.array([RANGE[c][0] for c in coords]); hi = np.array([RANGE[c][1] for c in coords])
@@ -258,6 +271,43 @@ def main():
     sd_rest = np.concatenate([np.full(m.Nm * nel, 1.0), np.full(m.K * nel, 1.0), np.full(m.N, 3.0)])
     R = (a.sigma_mV * 1e-3) ** 2
     run = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I, jnp.asarray(y_f), tfac=tfac, dts=dts))
+    if a.th_hold_s and coords and a.start == "soc":
+        # two time scales: the parameters are held at their prior values for the first th_hold_s seconds (negligible
+        # variance, no random walk, no cross-covariance: only the DFN state, i.e. SOC, is corrected), then released with
+        # the prior sd times --p0-th-release (cross-covariances with the state zeroed) and their random walk
+        kh = int(np.searchsorted(t, a.th_hold_s))
+        yj = jnp.asarray(y_f)
+        d1, d2 = (None, None) if dts is None else (np.asarray(dts[:kh]), np.asarray(dts[kh:]))   # step lengths: static
+        seg1 = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I[:kh], yj[:kh], dts=d1))
+        seg2 = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I[kh:], yj[kh:], dts=d2))
+        nzh = m.nz
+
+        def run(x0, P0, Qd):
+            P0 = np.array(P0); Qd = np.array(Qd)
+            P1 = P0.copy(); P1[nzh:, :] = 0.0; P1[:, nzh:] = 0.0
+            P1[nzh:, nzh:] = np.diag(1e-8 * np.diag(P0)[nzh:])
+            iv = None if ("Vb" not in coords or a.hold_vb) else nzh + coords.index("Vb")
+            if iv is not None:                    # the bias stays free during the hold
+                P1[iv, iv] = P0[iv, iv]
+            Q1 = Qd.copy()
+            if Q1.ndim == 1:
+                Q1[nzh:] = 0.0
+            else:
+                Q1[nzh:, :] = 0.0; Q1[:, nzh:] = 0.0
+            if iv is not None:
+                if Q1.ndim == 1:
+                    Q1[iv] = Qd[iv]
+                else:
+                    Q1[iv, iv] = Qd[iv, iv]
+            H1 = seg1(jnp.asarray(x0), jnp.asarray(P1), jnp.asarray(Q1))
+            P2 = np.array(H1["P_end"]); vb_keep = None if iv is None else (P2[iv, :].copy(), P2[:, iv].copy())
+            P2[nzh:, :] = 0.0; P2[:, nzh:] = 0.0
+            P2[nzh:, nzh:] = np.diag(np.diag(P0)[nzh:] * a.p0_th_release ** 2)
+            if vb_keep is not None:               # the bias continues with its own covariance
+                P2[iv, :nzh] = vb_keep[0][:nzh]; P2[:nzh, iv] = vb_keep[1][:nzh]; P2[iv, iv] = vb_keep[0][iv]
+            H2 = seg2(H1["x_end"], jnp.asarray(P2), jnp.asarray(Qd))
+            print("parameters held for the first %.0f s (%d steps), then released" % (a.th_hold_s, kh), flush=True)
+            return {k: jnp.concatenate([H1[k], H2[k]]) for k in H1 if k not in ("x_end", "P_end")}
     rows = []
     if a.start == "soc":
         rows = run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w, sd_shell, sd_rest, dt, tag, I, th_true)
@@ -362,6 +412,16 @@ def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w,
     """The SOC experiment: open loop and EKF from the wrong starts q0 + err; returns the csv rows."""
     c = cs["cells"][cell]
     P = m.P
+    ini = {k: float(v) for k, v in (it.split("=") for it in a.init.split(",") if it)}   # e.g. the previous block's end
+    tv0 = np.array([ini.get(c_, t_) for c_, t_ in zip(coords, tv)])
+    if ini:
+        print("parameters start at %s" % dict(zip(coords, tv0)), flush=True)
+    if ini.get("LLI") and d.get("meta", {}).get("dq") == "ocv":
+        # the closure sees the anode lowered by LLI dx_window_n: place the start on the OCV of the shifted window
+        import copy
+        cs2 = copy.deepcopy(cs); cs2["cells"][cell]["x100"] = c["x100"] - ini["LLI"] * P["dx_window_n"]
+        q_old = q0; q0 = datasets.q_from_ocv(cs2, cell, d["V_rest"], float(d["T_C"]) + 273.15)
+        print("start placed on the LLI-shifted window: q0 %.3f -> %.3f A.h" % (q_old, q0), flush=True)
     # SOC window in charge below the top of the set's window, q in [q_top, q_bot]; electrode stoichiometries at its ends
     if a.soc_vlim:
         vmax, vmin = (float(v) for v in a.soc_vlim.split(","))
@@ -393,14 +453,18 @@ def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w,
     nel, nz = m.nel, m.nz
     v = np.zeros(nz)
     v[:m.Nn] = -P["cmax_n"] / c["Q_n"]; v[m.Nn:nel] = P["cmax_p"] / c["Q_p"]    # d c_avg / d q [mol/m3 per A.h]
-    c0 = ek.coord_of(tv); dc = np.asarray(ek.dval_dc(jnp.asarray(c0)))
+    c0 = ek.coord_of(tv0); dc = np.asarray(ek.dval_dc(jnp.asarray(c0)))
     p0_th = a.p0_th * rng_w / dc
+    if "Vb" in coords:                      # the voltage bias: its own prior sd [mV]
+        p0_th[coords.index("Vb")] = a.p0_vb_mV * 1e-3 / dc[coords.index("Vb")]
     Pz = np.diag(np.r_[sd_shell, sd_rest] ** 2)
     Pz += a.p0_q ** 2 * np.outer(v, v)
     P0 = np.zeros((ek.n, ek.n)); P0[:nz, :nz] = Pz; P0[nz:, nz:] = np.diag(p0_th ** 2)
     qz = np.zeros(nz)
     qz[:m.Nn] = a.q_shell * P["cmax_n"] * np.sqrt(dt); qz[m.Nn:nel] = a.q_shell * P["cmax_p"] * np.sqrt(dt)
     Qd = np.r_[qz, a.q_th * rng_w * np.sqrt(dt) / dc]
+    if "Vb" in coords:                      # the voltage bias: its own random walk [V per sqrt(s)]
+        Qd[nz + coords.index("Vb")] = a.q_vb_mV * 1e-3 * np.sqrt(dt) / dc[coords.index("Vb")]
     if a.q_q > 0:
         # random walk on the cell's charge along the lithium-conserving direction v (all anode means move together, all
         # cathode means opposite): SOC uncertainty without roughening the particle profiles. sd q_q A.h per sqrt(h).
@@ -456,8 +520,77 @@ def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w,
                  Sy=H["Sy"], soc=soc, soc_p=soc_p, soc_n=soc_n, sd_soc=sd_soc, soc_ref=soc_ref, vals=H["vals"], sd_vals=H["sd_vals"],
                  coords=np.array(coords), resF=H["resF"], q0=q0, err=e, posdef=H["posdef"], minDiagP=H["minDiagP"],
                  ce_min=H["ce_min"], step_finite=H["finite"], li_rel=H["li_rel"], eta=H["eta"], sigma_mV=a.sigma_mV, soc_window=np.array([x0w, x100w, y100w, y0w]), cap_1C_t=d.get("meta", {}).get("cap_1C", (np.zeros(0), np.zeros(0)))[0], cap_1C=d.get("meta", {}).get("cap_1C", (np.zeros(0), np.zeros(0)))[1], **extra,
-                 **anode_profile(m, H, coords))
+                 **anode_profile(m, H, coords),
+                 **(headroom(m, ek, H, t, I_np, a.headroom_every_s, a.headroom_imax, a.headroom_horizon_s) if a.headroom_every_s else {}))
     return rows
+
+
+def headroom(m, ek, H, t, I_np, every_s, imax, horizon_s=300.0, n_i=13, vmax=4.2, dt_h=10.0):
+    """Charging headroom from the EKF's states (predictive). Every every_s seconds the updated state x (with the estimated
+    R_f and LLI) is taken as the start of a constant-current charge of horizon_s seconds, simulated with the model for
+    charging currents 0..imax [A]. Over the horizon: the minimum of the lithium deposition potential
+    LDP = phi_s - phi_e - R_f j_n at the anode/separator interface [V vs Li/Li+] and the maximum voltage. Headroom:
+    I_pl = largest current with LDP >= 0 over the horizon (plating limit), I_V = largest with V <= vmax (voltage limit);
+    I* = min of the two, and which one binds. Also the LDP at the measured current (closure at the state). For the npz."""
+    A_ = m.A; nz = m.nz
+    mh = DFN(m.P, m.Nn, m.Ns, m.Np, m.Nm, m.K, dt_h, m.grid)        # the forward charge on dt_h-s steps (same state layout)
+    Ah = mh.A
+    X = np.asarray(H["x"])
+    idx = np.r_[np.flatnonzero(np.diff(np.floor(t / every_s)) > 0) + 1]
+    Ig = jnp.asarray(-np.linspace(0.0, imax, n_i))       # charging: negative current
+    nh = int(round(horizon_s / dt_h))
+
+    @jax.jit
+    def sweep(x, I_now):
+        z, c = x[:nz], x[nz:]
+        th = ek.th_of(c); zf = ek.zeff_of(z, c); em = ek.em_of(th)
+        Eh, Gh = mh.elec_mats(jnp.array([1.0, 1.0, 1.0])); emh = (Eh, Gh.at[:, :m.Nn].multiply(th[1]))   # as EKF.em_of
+
+        def closure(mm, AA, ee, zz, g, I):
+            csn, csp, ce = mm.surf(zz)
+            g, _, _ = AA.solve_robust(g, csn, csp, ce, I, th, tol=1e-10, imp=mm.imp_coeffs(zz, th, None, ee))
+            return g, AA.V_of(g, I, csn, csp), mm.interface(g, csn, th)[1]
+
+        def g_start(mm, AA, ee, I):
+            csn, csp, ce = mm.surf(zf)
+            return AA.newton(AA.guess(csn, csp, I, th), csn, csp, ce, I, th, tol=1e-10, imp=mm.imp_coeffs(zf, th, None, ee))[0]
+
+        def charge(I):
+            def body(carry, _):
+                zz, g = carry
+                g, V, ldp = closure(mh, Ah, emh, zz, g, I)
+                return (mh.advance(zz, g, th, em=emh), g), (V, ldp)
+            _, (V, ldp) = jax.lax.scan(body, (zf, g_start(mh, Ah, emh, I)), None, length=nh)
+            return jnp.min(ldp), jnp.max(V)
+
+        ldp_min, v_max = jax.lax.map(charge, Ig)            # sequential: a vmapped while-loop solver runs to the slowest current
+        _, _, ldp_now = closure(m, A_, em, zf, g_start(m, A_, em, I_now), I_now)
+        return ldp_min, v_max, ldp_now
+
+    def first_cross(y):                                   # current where y (falling with the current) reaches 0
+        Ia = -np.asarray(Ig)
+        if y[0] <= 0:
+            return 0.0
+        s = np.flatnonzero((y[:-1] > 0) & (y[1:] <= 0))
+        if not len(s):
+            return np.inf
+        i = s[0]
+        return Ia[i] + (Ia[i + 1] - Ia[i]) * y[i] / (y[i] - y[i + 1])
+
+    I_pl, I_V, ldp_now, ldp_rest = [], [], [], []
+    import time as _time; _t0 = _time.time()
+    for k in idx:
+        lm, vm, ln = (np.asarray(v) for v in sweep(jnp.asarray(X[k]), float(I_np[k])))
+        I_pl.append(first_cross(lm)); I_V.append(first_cross(vmax - vm)); ldp_now.append(float(ln)); ldp_rest.append(float(lm[0]))
+        if len(I_pl) in (1, 2, 5):
+            print("  headroom state %d: %.1f s since start" % (len(I_pl), _time.time() - _t0), flush=True)
+    I_pl, I_V = np.array(I_pl), np.array(I_V)
+    fin = I_pl[np.isfinite(I_pl)]
+    print("headroom (%g s horizon, %d states): plating limit %s A, voltage limit binds %.0f %% of the time"
+          % (horizon_s, len(idx), ("%.2f..%.2f" % (fin.min(), fin.max())) if len(fin) else "> %.1f" % imax,
+             100 * np.mean(I_V < I_pl)), flush=True)
+    return dict(hr_t=t[idx], hr_I_pl=I_pl, hr_I_V=I_V, hr_I=np.minimum(I_pl, I_V), hr_ldp=np.array(ldp_now),
+                hr_ldp_rest=np.array(ldp_rest), hr_imax=imax, hr_horizon_s=horizon_s)
 
 
 def anode_profile(m, H, coords):
