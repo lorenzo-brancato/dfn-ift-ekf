@@ -12,6 +12,8 @@
 \addplot[lref] table[x=t, y=phi_pl_reference_mV, col sep=comma] {figures/data/pulse_th1.csv};
 \addplot[lgb] table[x=t, y=phi_pl_EKF_mV, col sep=comma] {figures/data/pulse_th1.csv};
 \addplot[lspme] table[x=t, y=phi_pl_UKF_SPMe_mV, col sep=comma] {figures/data/pulse_th1.csv};
+\addplot[only marks, mark=*, mark size=1.1pt, black, forget plot] coordinates {(29.5,-67.4889)};
+\node[anchor=west, font=\scriptsize, inner sep=1pt] at (axis cs:31.0,-67.4889) {$-67.5$\,mV};
 \legend{reference, grey-box EKF, SPMe UKF}
 \node[anchor=south west, font=\footnotesize] at (rel axis cs:0.02,0.02) {th1, fresh};
 \nextgroupplot[xmin=-10, xmax=60, ymin=-110, ymax=140, ytick={-100,-50,0,50,100}, yticklabels={},
@@ -21,6 +23,8 @@
 \addplot[lref] table[x=t, y=phi_pl_reference_mV, col sep=comma] {figures/data/pulse_th2.csv};
 \addplot[lgb] table[x=t, y=phi_pl_EKF_mV, col sep=comma] {figures/data/pulse_th2.csv};
 \addplot[lspme] table[x=t, y=phi_pl_UKF_SPMe_mV, col sep=comma] {figures/data/pulse_th2.csv};
+\addplot[only marks, mark=*, mark size=1.1pt, black, forget plot] coordinates {(28.5,-62.9846)};
+\node[anchor=west, font=\scriptsize, inner sep=1pt] at (axis cs:30.0,-62.9846) {$-63.0$\,mV};
 \node[anchor=south west, font=\footnotesize] at (rel axis cs:0.02,0.02) {th2, mid-aged};
 \nextgroupplot[xmin=-10, xmax=60, ymin=-110, ymax=140, ytick={-100,-50,0,50,100}, yticklabels={},
   xlabel={time from pulse start (s)}]
@@ -29,6 +33,8 @@
 \addplot[lref] table[x=t, y=phi_pl_reference_mV, col sep=comma] {figures/data/pulse_th4.csv};
 \addplot[lgb] table[x=t, y=phi_pl_EKF_mV, col sep=comma] {figures/data/pulse_th4.csv};
 \addplot[lspme] table[x=t, y=phi_pl_UKF_SPMe_mV, col sep=comma] {figures/data/pulse_th4.csv};
+\addplot[only marks, mark=*, mark size=1.1pt, black, forget plot] coordinates {(21,-55.2539)};
+\node[anchor=west, font=\scriptsize, inner sep=1pt] at (axis cs:22.5,-55.2539) {$-55.3$\,mV};
 \node[anchor=south west, font=\footnotesize] at (rel axis cs:0.02,0.02) {th4, aged};
 % ---------- row 2: 1C constant-current charge; markers at the first zero crossing ----------
 \nextgroupplot[xmin=0, xmax=21.5, ymin=-25, ymax=60, xtick={0,5,10,15,20},

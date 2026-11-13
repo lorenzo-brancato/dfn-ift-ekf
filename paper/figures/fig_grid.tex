@@ -1,42 +1,55 @@
-% Effect of the spatial grid (value labels written from data/grid.csv). Data: data/grid.csv (all panels: mid-aged cell th2, M17)
+% Effect of the spatial grid; value labels written from data/grid.csv. Data: data/grid.csv (mid-aged cell th2, M17; Table I merged into this figure)
 \begin{tikzpicture}
-\begin{groupplot}[paper, group style={group size=1 by 2, vertical sep=5mm, group name=g, x descriptions at=edge bottom},
-  width=60mm, height=20mm, y label style={at={(axis description cs:-0.09,0.5)}, anchor=south}, xmin=-0.6, xmax=3.6, xtick={0,1,2,3},
-  xticklabels={{10/5/10\\unif.}, {20/10/20\\unif.}, {40/20/40\\unif.}, {20/10/20\\4:1}}, x tick label style={align=center},
-  xlabel={grid (cells: negative / separator / positive)}, xticklabel style={align=center}, /pgf/bar width=5pt,
+\begin{groupplot}[paper, group style={group size=1 by 3, vertical sep=5mm, group name=g, x descriptions at=edge bottom},
+  width=64mm, height=20mm, y label style={at={(axis description cs:-0.09,0.5)}, anchor=south}, xmin=-0.6, xmax=4.6, xtick={0,1,2,3,4},
+  xticklabels={{10/5/10\\unif., 8\\248}, {10/5/10\\unif., 12\\328}, {20/10/20\\unif., 12\\653}, {40/20/40\\unif., 16\\1623}, {\textbf{20/10/20}\\\textbf{4:1, 12}\\\textbf{653}}},
+  x tick label style={align=center, font=\scriptsize},
+  xlabel={grid (cells), modes; number of states $N$}, /pgf/bar width=5pt,
   legend style={at={(0.98,0.97)}, anchor=north east, fill=none}, legend columns=3,
   legend style={/tikz/every even column/.append style={column sep=1.5mm}}]
-\nextgroupplot[ymin=0, ymax=4.6, ytick={0,1,2,3,4}, ylabel={$E_V$ RMS (mV)}]
-\addplot[ybar, bar shift=-3pt, fill=cSPMe, draw=none, barleg] table[x expr={mod(\thisrow{x}+3,4)}, y=panel_a_E_V_1C_mV, col sep=comma] {figures/data/grid.csv};
-\addplot[ybar, bar shift=3pt, fill=cGB, draw=none, barleg, postaction={pattern=north east lines, pattern color=white}] table[x expr={mod(\thisrow{x}+3,4)}, y=panel_a_E_V_3C_mV, col sep=comma] {figures/data/grid.csv};
+\nextgroupplot[ymin=0, ymax=4.8, ytick={0,1,2,3,4}, ylabel={$E_V$ RMS (mV)}]
+\addplot[ybar, bar shift=-3pt, fill=cSPMe, draw=none, barleg] table[x=x, y=panel_a_E_V_1C_mV, col sep=comma] {figures/data/grid.csv};
+\addplot[ybar, bar shift=3pt, fill=cGB, draw=none, barleg, postaction={pattern=north east lines, pattern color=white}] table[x=x, y=panel_a_E_V_3C_mV, col sep=comma] {figures/data/grid.csv};
 \legend{1C, 3C (30 s)}
-\node[font=\tiny, inner sep=0.8pt, xshift=-3pt, rotate=90, anchor=west] at (axis cs:3,0.0309) {0.03};
-\node[font=\tiny, inner sep=0.8pt, xshift=3pt, rotate=90, anchor=west] at (axis cs:3,0.6002) {0.60};
-\node[font=\tiny, inner sep=0.8pt, xshift=-3pt, rotate=90, anchor=west] at (axis cs:0,2.3041) {2.30};
-\node[font=\tiny, inner sep=0.8pt, xshift=3pt, rotate=90, anchor=west] at (axis cs:0,3.5377) {3.54};
-\node[font=\tiny, inner sep=0.8pt, xshift=-3pt, rotate=90, anchor=west] at (axis cs:1,1.0668) {1.07};
-\node[font=\tiny, inner sep=0.8pt, xshift=3pt, rotate=90, anchor=west] at (axis cs:1,1.5506) {1.55};
-\node[font=\tiny, inner sep=0.8pt, xshift=-3pt, rotate=90, anchor=west] at (axis cs:2,0.3975) {0.40};
-\node[font=\tiny, inner sep=0.8pt, xshift=3pt, rotate=90, anchor=west] at (axis cs:2,0.4915) {0.49};
+\node[font=\tiny, inner sep=0.8pt, xshift=-3pt, rotate=90, anchor=west] at (axis cs:0,2.3041) {2.3};
+\node[font=\tiny, inner sep=0.8pt, xshift=-3pt, rotate=90, anchor=west] at (axis cs:1,2.3045) {2.3};
+\node[font=\tiny, inner sep=0.8pt, xshift=-3pt, rotate=90, anchor=west] at (axis cs:2,1.0668) {1.1};
+\node[font=\tiny, inner sep=0.8pt, xshift=-3pt, rotate=90, anchor=west] at (axis cs:3,0.3975) {0.4};
+\node[font=\tiny, inner sep=0.8pt, xshift=-3pt, rotate=90, anchor=west] at (axis cs:4,0.0309) {0.0};
+\node[font=\tiny, inner sep=0.8pt, xshift=3pt, rotate=90, anchor=west] at (axis cs:0,3.5377) {3.5};
+\node[font=\tiny, inner sep=0.8pt, xshift=3pt, rotate=90, anchor=west] at (axis cs:1,3.6632) {3.7};
+\node[font=\tiny, inner sep=0.8pt, xshift=3pt, rotate=90, anchor=west] at (axis cs:2,1.5506) {1.6};
+\node[font=\tiny, inner sep=0.8pt, xshift=3pt, rotate=90, anchor=west] at (axis cs:3,0.4915) {0.5};
+\node[font=\tiny, inner sep=0.8pt, xshift=3pt, rotate=90, anchor=west] at (axis cs:4,0.6002) {0.6};
 \nextgroupplot[ymin=0, ymax=13.5, ytick={0,4,8,12}, ylabel={$|$bias$|$ (\% of range)}]
-\addplot[ybar, bar shift=-5.5pt, fill=cGre, draw=none, barleg] table[x expr={mod(\thisrow{x}+3,4)}, y=panel_b_abs_bias_Rf_pct_of_range, col sep=comma] {figures/data/grid.csv};
-\addplot[ybar, bar shift=0pt, fill=cBlu, draw=none, barleg, postaction={pattern=crosshatch dots, pattern color=white}] table[x expr={mod(\thisrow{x}+3,4)}, y=panel_b_abs_bias_LAM_pct_of_range, col sep=comma] {figures/data/grid.csv};
-\addplot[ybar, bar shift=5.5pt, fill=cPur, draw=none, barleg, postaction={pattern=north east lines, pattern color=white}] table[x expr={mod(\thisrow{x}+3,4)}, y=panel_b_abs_bias_Ds_pct_of_range, col sep=comma] {figures/data/grid.csv};
+\addplot[ybar, bar shift=-5.5pt, fill=cGre, draw=none, barleg] table[x=x, y=panel_b_abs_bias_Rf_pct_of_range, col sep=comma] {figures/data/grid.csv};
+\addplot[ybar, bar shift=0pt, fill=cBlu, draw=none, barleg, postaction={pattern=crosshatch dots, pattern color=white}] table[x=x, y=panel_b_abs_bias_LAM_pct_of_range, col sep=comma] {figures/data/grid.csv};
+\addplot[ybar, bar shift=5.5pt, fill=cPur, draw=none, barleg, postaction={pattern=north east lines, pattern color=white}] table[x=x, y=panel_b_abs_bias_Ds_pct_of_range, col sep=comma] {figures/data/grid.csv};
 \legend{$R_{\mathrm{f}}$, LAM, $D_{\mathrm{s}}$}
-\node[font=\tiny, inner sep=0.8pt, xshift=-5.5pt, rotate=90, anchor=west] at (axis cs:3,0.8967) {0.90};
-\node[font=\tiny, inner sep=0.8pt, xshift=0pt, rotate=90, anchor=west] at (axis cs:3,0.1033) {0.10};
-\node[font=\tiny, inner sep=0.8pt, xshift=5.5pt, rotate=90, anchor=west] at (axis cs:3,1.2624) {1.26};
-\node[font=\tiny, inner sep=0.8pt, xshift=-5.5pt, rotate=90, anchor=west] at (axis cs:0,6.0773) {6.08};
-\node[font=\tiny, inner sep=0.8pt, xshift=0pt, rotate=90, anchor=west] at (axis cs:0,0.5935) {0.59};
-\node[font=\tiny, inner sep=0.8pt, xshift=5.5pt, rotate=90, anchor=west] at (axis cs:0,9.2066) {9.21};
-\node[font=\tiny, inner sep=0.8pt, xshift=-5.5pt, rotate=90, anchor=west] at (axis cs:1,2.5903) {2.59};
-\node[font=\tiny, inner sep=0.8pt, xshift=0pt, rotate=90, anchor=west] at (axis cs:1,0.3188) {0.32};
-\node[font=\tiny, inner sep=0.8pt, xshift=5.5pt, rotate=90, anchor=west] at (axis cs:1,4.8878) {4.89};
-\node[font=\tiny, inner sep=0.8pt, xshift=-5.5pt, rotate=90, anchor=west] at (axis cs:2,0.4373) {0.44};
-\node[font=\tiny, inner sep=0.8pt, xshift=0pt, rotate=90, anchor=west] at (axis cs:2,0.1767) {0.18};
-\node[font=\tiny, inner sep=0.8pt, xshift=5.5pt, rotate=90, anchor=west] at (axis cs:2,2.5643) {2.56};
+\node[font=\tiny, inner sep=0.8pt, xshift=-5.5pt, rotate=90, anchor=west] at (axis cs:0,6.0773) {6.1};
+\node[font=\tiny, inner sep=0.8pt, xshift=-5.5pt, rotate=90, anchor=west] at (axis cs:1,6.6249) {6.6};
+\node[font=\tiny, inner sep=0.8pt, xshift=-5.5pt, rotate=90, anchor=west] at (axis cs:2,2.5903) {2.6};
+\node[font=\tiny, inner sep=0.8pt, xshift=-5.5pt, rotate=90, anchor=west] at (axis cs:3,0.4373) {0.4};
+\node[font=\tiny, inner sep=0.8pt, xshift=-5.5pt, rotate=90, anchor=west] at (axis cs:4,0.8967) {0.9};
+\node[font=\tiny, inner sep=0.8pt, xshift=0pt, rotate=90, anchor=west] at (axis cs:0,0.5935) {0.6};
+\node[font=\tiny, inner sep=0.8pt, xshift=0pt, rotate=90, anchor=west] at (axis cs:1,0.5497) {0.5};
+\node[font=\tiny, inner sep=0.8pt, xshift=0pt, rotate=90, anchor=west] at (axis cs:2,0.3188) {0.3};
+\node[font=\tiny, inner sep=0.8pt, xshift=0pt, rotate=90, anchor=west] at (axis cs:3,0.1767) {0.2};
+\node[font=\tiny, inner sep=0.8pt, xshift=0pt, rotate=90, anchor=west] at (axis cs:4,0.1033) {0.1};
+\node[font=\tiny, inner sep=0.8pt, xshift=5.5pt, rotate=90, anchor=west] at (axis cs:0,9.2066) {9.2};
+\node[font=\tiny, inner sep=0.8pt, xshift=5.5pt, rotate=90, anchor=west] at (axis cs:1,8.6154) {8.6};
+\node[font=\tiny, inner sep=0.8pt, xshift=5.5pt, rotate=90, anchor=west] at (axis cs:2,4.8878) {4.9};
+\node[font=\tiny, inner sep=0.8pt, xshift=5.5pt, rotate=90, anchor=west] at (axis cs:3,2.5643) {2.6};
+\node[font=\tiny, inner sep=0.8pt, xshift=5.5pt, rotate=90, anchor=west] at (axis cs:4,1.2624) {1.3};
+\nextgroupplot[ymode=log, log origin=infty, ymin=0.5, ymax=300, ytick={1,10,100}, yticklabels={1,10,100}, ylabel={step cost (ms)}]
+\addplot[ybar, bar shift=0pt, fill=cGB!70, draw=none] table[x=x, y=cost_ms, col sep=comma] {figures/data/grid.csv};
+\node[font=\tiny, inner sep=0.8pt, anchor=south] at (axis cs:0,1.2996) {1.3};
+\node[font=\tiny, inner sep=0.8pt, anchor=south] at (axis cs:1,1.8537) {1.9};
+\node[font=\tiny, inner sep=0.8pt, anchor=south] at (axis cs:2,7.9039) {7.9};
+\node[font=\tiny, inner sep=0.8pt, anchor=south] at (axis cs:3,54.8383) {55};
+\node[font=\tiny, inner sep=0.8pt, anchor=south] at (axis cs:4,7.9370) {7.9};
 \end{groupplot}
 \input{figures/fig_grid_panel_a.tex}
 \coordinate (L) at (current bounding box.west);
-\foreach \p/\l in {grids/a, g c1r1/b, g c1r2/c}{\node[anchor=south west, font=\footnotesize, inner sep=0pt] at ($(L |- \p.north)+(0,1.2mm)$) {(\l)};}
+\foreach \p/\l in {grids/a, g c1r1/b, g c1r2/c, g c1r3/d}{\node[anchor=south west, font=\footnotesize, inner sep=0pt] at ($(L |- \p.north)+(0,1.2mm)$) {(\l)};}
 \end{tikzpicture}

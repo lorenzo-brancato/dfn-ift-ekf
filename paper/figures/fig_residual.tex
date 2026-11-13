@@ -1,8 +1,8 @@
 % Closure residual as a per-step certificate. Data: data/residual.csv, data/residual_fallback.csv
 \begin{tikzpicture}
-\begin{axis}[paper, width=60mm, height=25mm, ymode=log, ymin=1e-11, ymax=1e2, xmin=0, xmax=500,
+\begin{axis}[paper, width=60mm, height=19mm, ymode=log, ymin=1e-11, ymax=1e2, xmin=0, xmax=500,
   ytick={1e-10,1e-8,1e-6,1e-4,1e-2,1}, xlabel={time (s)}, ylabel={$\|\bm F\|_\infty$},
-  legend style={at={(0.98,0.03)}, anchor=south east}]
+  legend style={at={(0.02,0.03)}, anchor=south west, legend columns=2, font=\scriptsize}]
 \draw[black!60, line width=0.4pt, dash pattern=on 1.5pt off 1pt] (axis cs:0,1e-4) -- (axis cs:500,1e-4);
 \addplot[cGB, line width=0.5pt] table[x=t_s, y=res, col sep=comma] {figures/data/residual.csv};
 \addplot[only marks, mark=|, mark size=2pt, cGre, line width=0.5pt, barleg] table[x=t_s, y expr=2e1, col sep=comma] {figures/data/residual_fallback.csv};
