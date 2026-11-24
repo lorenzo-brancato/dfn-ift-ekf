@@ -31,6 +31,11 @@ int main(int argc, char** argv) {
         size_t n = I.size();                                  // up to the first implausible Python voltage
         for (size_t k = 0; k < I.size(); ++k)                 // (at 0 degC a 1C discharge collapses near 23 % SOC)
             if (!(Vp[k] >= 2.5 && Vp[k] <= 4.4)) { n = k; break; }
+        if (c.has("res")) {                                   // or the first Python step whose closure did not converge:
+            std::vector<double> res = c.get("res");           // the golden's state is off from there on (the paper set,
+            for (size_t k = 0; k < n; ++k)                    // Ea_r and Ea_Dp at 90 kJ/mol, at the end of a 1C discharge)
+                if (!(res[k] <= 1e-8)) { n = k; break; }   // (converged: ~1e-12)
+        }
         I.resize(n);
         for (size_t k = 0; k < n; ++k) {
             double V = ol.step((real_t)I[k], (int)idt[k]);

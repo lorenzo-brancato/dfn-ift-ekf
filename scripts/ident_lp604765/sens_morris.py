@@ -25,6 +25,13 @@ SCREEN = dict(
     x100=(0.60, 0.72, "lin"), y100=(0.38, 0.43, "lin"), Q_n=(3.8, 5.0, "lin"), Q_p=(3.5, 4.2, "lin"),
     dq_40=(-0.12, 0.02, "lin"), dq_00=(-0.05, 0.15, "lin"),
 )
+if C.CELL == "lgm50":       # LG M50: the dynamics only (each cell's window and the entropic terms come from the OCV step)
+    SCREEN = dict(
+        Ds_n=(3e-15, 3e-13, "log"), Ds_p=(4e-16, 4e-14, "log"), drop=(0.0, 2.0, "lin"), shape=(0.7, 3.0, "lin"),
+        k0_n=(0.1, 10.0, "log"), k0_p=(0.1, 10.0, "log"), R_contact=(1e-3, 2e-2, "log"), tau=(0.5, 5.0, "log"),
+        Ea_Dn=(10e3, 80e3, "lin"), Ea_Dp=(10e3, 80e3, "lin"), Ea_r=(10e3, 80e3, "lin"), Ea_s=(0.0, 40e3, "lin"),
+
+    )
 V_CLIP = (2.0, 4.5)
 
 
@@ -61,7 +68,7 @@ def main():
     ap.add_argument("--tests", default="HPPC20,HPPC40,HPPC00")
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
-    names = C.ALL_NAMES
+    names = C.ALL_NAMES if C.CELL != "lgm50" else list(SCREEN)
     keys = a.tests.split(",")
     prof = C.profiles(keys)
     w = {k: C.weights(prof[k]) for k in keys}
@@ -69,7 +76,7 @@ def main():
     jobs = []
     for ti, (pts, order) in enumerate(trajs):
         for pi, u in enumerate(pts):
-            p = {n: from_unit(n, u[j]) for j, n in enumerate(names)}
+            p = {**C.NOMINAL, **{n: from_unit(n, u[j]) for j, n in enumerate(names)}}
             for key in keys:
                 jobs.append(((ti, pi, key), (key, p, False)))
     t0 = time.time()

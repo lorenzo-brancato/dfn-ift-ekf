@@ -31,6 +31,7 @@ def main():
     ap.add_argument("--runs", required=True)
     ap.add_argument("--tests", default="CYC20,AGE22V,AGE22,AGE27,AGE30")
     ap.add_argument("--q-window", type=float, default=2.220)
+    ap.add_argument("--q-window-run", action="store_true", help="SOC reference full scale = the run's own OCV window at each anchor")
     ap.add_argument("--vb", action="store_true", help="a fourth row: the voltage bias Vb [mV]")
     a = ap.parse_args()
     tests = a.tests.split(",")
@@ -44,7 +45,7 @@ def main():
             th = d["t"] / 3600
             ok = np.isfinite(d["soc"])
             last = np.flatnonzero(ok)[-1]
-            ref, anc, _ = soc_reference(d["t"], d["I"], q_window=a.q_window)
+            ref, anc, _ = soc_reference(d["t"], d["I"], q_window=d["Q_window_Ah"] if (a.q_window_run and "Q_window_Ah" in d) else a.q_window)
             co = list(map(str, d["coords"]))
             rf = d["vals"][:, co.index("Rf")]; lli = 1e3 * d["lli_Ah"]
             ax[0, j].plot(th[ok], 100 * (d["soc"] - ref)[ok], col, lw=0.6, label=lab)
@@ -66,7 +67,7 @@ def main():
     if a.vb:
         ax[3, 0].set_ylabel("voltage bias [mV]")
     ax[0, 0].legend(fontsize=6, loc="lower right")
-    out = os.path.join(a.runs, "fig_rfli")
+    out = os.path.join(a.runs, "fig_rfli" + ("_qwrun" if a.q_window_run else ""))
     fig.savefig(out + ".png", dpi=200); fig.savefig(out + ".pdf"); plt.close(fig)
     print("wrote", out + ".png")
 

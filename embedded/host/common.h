@@ -23,6 +23,10 @@ struct Csv {
         std::fprintf(stderr, "column %s not found\n", n.c_str());
         std::exit(2);
     }
+    bool has(const std::string& n) const {
+        for (const auto& s : names) if (s == n) return true;
+        return false;
+    }
     std::vector<double> get(const std::string& n) const {
         int c = col(n);
         std::vector<double> v(rows.size());

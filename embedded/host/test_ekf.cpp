@@ -19,7 +19,13 @@ int main(int argc, char** argv) {
     std::string file = golden(std::string("ekf_CYC20_e") + err + ".csv");
     if (!read_csv(file, c)) { std::printf("no golden %s\n", file.c_str()); return 0; }
     std::vector<double> I = c.get("I"), y = c.get("y"), Vp = c.get("V"), socp = c.get("soc"), sdp = c.get("sd_soc"),
-                        Rfp = c.get("Rf"), soc_ref = c.get("soc_ref");
+                        Rfp = c.get("Rf"), soc_ref = c.get("soc_ref"), tt = c.get("t");
+    // voltage updates of the golden run (y_every_s: one per interval; older goldens: every step), the bias
+    std::vector<double> upd = c.has("upd") ? c.get("upd") : std::vector<double>(I.size(), 1.0);
+    std::vector<double> Vbp = c.has("Vb") ? c.get("Vb") : std::vector<double>(I.size(), 0.0);
+    const bool has_ldp = c.has("ldp");
+    std::vector<double> ldpp = has_ldp ? c.get("ldp") : std::vector<double>(I.size(), 0.0);
+    std::vector<double> LLIp = c.has("LLI") ? c.get("LLI") : std::vector<double>(I.size(), 0.0);
     int idt = -1;
     for (int d = 0; d < dfn_model::NDT; ++d) {
         double dt = (c.rows.size() > 1) ? c.rows[1][0] - c.rows[0][0] : 0;
@@ -30,12 +36,21 @@ int main(int argc, char** argv) {
     z_at(dfn_model::q0 + std::atof(err), z0);
     ekf.init(z0, 0, idt, (real_t)I[0]);
     const size_t n = I.size();
-    double smax = 0, s2 = 0, vmax = 0, rfmax = 0, sdmax = 0, pdmin = 1e300, mdmin = 1e300, e2ref = 0;
-    int npd_bad = 0;
+    double smax = 0, s2 = 0, vmax = 0, rfmax = 0, sdmax = 0, pdmin = 1e300, mdmin = 1e300, e2ref = 0, vbmax = 0, llimax = 0, ldpmax = 0;
+    int npd_bad = 0, nupd = 0;
     Timer tm;
     double t_pd = 0;
     for (size_t k = 0; k < n; ++k) {
-        dfn::EkfOut o = ekf.step((real_t)I[k], (real_t)y[k], idt);
+        if (ekf.held && tt[k] >= (double)dfn_model::hold_s) ekf.release();   // the golden's second segment starts here
+        const bool use = upd[k] != 0;
+        nupd += use;
+        dfn::EkfOut o = ekf.step((real_t)I[k], (real_t)y[k], idt, use);
+        double dvb = std::fabs(o.Vb - Vbp[k]) * 1e3;
+        if (!(dvb <= vbmax)) vbmax = dvb;
+        double dp = has_ldp ? std::fabs(o.ldp - ldpp[k]) * 1e3 : 0.0;
+        if (!(dp <= ldpmax)) ldpmax = dp;
+        double dl = std::fabs(o.LLI - LLIp[k]);
+        if (!(dl <= llimax)) llimax = dl;
         double ds = std::fabs(o.soc - socp[k]) * 100;
         if (!(ds <= smax)) smax = ds;
         s2 += ds * ds;
@@ -65,13 +80,16 @@ int main(int argc, char** argv) {
 #endif
     }
     double wall = tm.s() - t_pd;
-    bool ok = smax <= tol && npd_bad == 0;
+    bool ok = smax <= tol && npd_bad == 0 && (!has_ldp || ldpmax <= 1.0);   // LDP within 1 mV
     std::printf("EKF  %s  %s  CYC20 e%s  %zu steps of %g s\n", dfn_model::TAG, prec(), err, n, dfn_model::DT[idt]);
     std::printf("  SOC - SOC_py: max %.4f %% rms %.4f %% (tol %.2f)   V - V_py max %.3f mV   Rf - Rf_py max %.3g   sd_SOC diff max %.4f %%\n",
                 smax, std::sqrt(s2 / n), tol, vmax, rfmax, sdmax);
     std::printf("  SOC vs Coulomb counting, 2nd half rms %.3f %%   final SOC %.4f (py %.4f)  Rf %.3f (py %.3f)\n",
                 std::sqrt(e2ref / (n - n / 2)), (double)dfn::soc_of_ybar(dfn::ybar(ekf.x)), socp[n - 1],
                 (double)std::exp(ekf.x[dfn::ITH]), Rfp[n - 1]);
+    if (has_ldp) std::printf("  LDP - LDP_py max %.4f mV\n", ldpmax);
+    std::printf("  voltage updates %d of %zu steps   Vb - Vb_py max %.3f mV (end %.2f mV, py %.2f)   LLI - LLI_py max %.2g\n",
+                nupd, n, vbmax, 1e3 * (double)ekf.vbias(), 1e3 * Vbp[n - 1], llimax);
 #if DFN_COV_UD
     std::printf("  covariance (UD): min D %.3g, D <= 0 at %d steps\n", mdmin, npd_bad);
 #else

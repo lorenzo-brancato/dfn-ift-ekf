@@ -131,6 +131,9 @@ def main():
                     help="with --t-input: the temperature rise above the run's 5th percentile is multiplied by this (core vs surface)")
     ap.add_argument("--p-mult", default="", help="multipliers on P after the temperature laws, e.g. De=2,kappa=1.5 (k0 = both k0_n, k0_p)")
     ap.add_argument("--max-hours", type=float, default=None)
+    ap.add_argument("--t-cell", default=None,
+                    help="folder of vtemp_<test>.npz (virtual_temperature.py, or a measured surface temperature in the same "
+                         "format): the model is evaluated at this uniform cell temperature at every step (EKF.set_temperature_law)")
     ap.add_argument("--adaptive", action="store_true",
                     help="variable step from the --dt grid: a step ends when the current leaves the band of its first sample "
                          "(|I - I_0| > --adapt-rel |I_0| + --adapt-abs) or after --adapt-max s; model current = the step's mean, "
@@ -142,6 +145,8 @@ def main():
     ap.add_argument("--mask-vmin", type=float, default=None, help="no voltage update at V <= this (end-of-discharge knee) [V]")
     ap.add_argument("--y-every-s", type=float, default=None,
                     help="voltage update only once per this many seconds (the others: prediction only) [s]")
+    ap.add_argument("--res-skip", type=float, default=None,
+                    help="no voltage update at a step whose closure residual ||F||_inf exceeds this (its V is not converged)")
     ap.add_argument("--innov-clip-mV", type=float, default=None, help="innovation used for the state update clipped to +-this [mV]")
     ap.add_argument("--p0-vb-mV", type=float, default=20.0, help="prior sd of the voltage bias Vb (coords ... ,Vb) [mV]")
     ap.add_argument("--q-vb-mV", type=float, default=0.5, help="random walk of the voltage bias [mV per sqrt(s)]")
@@ -192,6 +197,10 @@ def main():
         gaps = np.diff(t)
         if np.any(np.abs(gaps - dt) > 1e-6):
             print("warning: %d gaps in the %g-s grid (max %.0f s), treated as %g s" % (np.sum(np.abs(gaps - dt) > 1e-6), dt, gaps.max(), dt))
+    if a.t_cell:                            # cell temperature input on the data grid (before the adaptive steps average it)
+        vt = np.load(os.path.join(a.t_cell, "vtemp_%s.npz" % d["test"]))
+        d = {**d, "T": np.interp(d["t"], vt["t"], vt["T_C"])}
+        print("cell temperature input: %s, %.1f..%.1f C" % (a.t_cell, d["T"].min(), d["T"].max()), flush=True)
     dts = None
     if a.adaptive:
         d = adaptive_steps(d, dt, a.adapt_max, a.adapt_rel, a.adapt_abs)
@@ -261,6 +270,14 @@ def main():
         print("lithium pseudo-measurement: sd %.2g A.h of %.3f A.h (relative %.3g)" % (a.li_sigma_Ah, li_ref * P["area"] * 96485.33212 / 3600.0, a.li_sigma), flush=True)
     # li_ref: the lithium of the identified beginning-of-life window (x100, y100; any q: x Q_n + y Q_p is constant on it)
     ek = EKF(m, coords=coords, fixed=dict(Rf=1.0, LAM=0.0, Ds=1.0), transform=a.transform, li_sigma=a.li_sigma, li_ref=li_ref)
+    ek.res_skip = a.res_skip
+    T_cell = None
+    if a.t_cell:
+        tl = cs["temperature"]; e_ = tl["electrolyte"]
+        ek.set_temperature_law(dict(T_ref=cs["T_ref_K"], Ea_Dn=tl["Ea_Dn"], Ea_Dp=a.ea_dp or tl["Ea_Dp"], Ea_r=tl["Ea_r"],
+                                    Ea_s=tl["Ea_s"], kappa_T=(e_["T_K"], e_["kappa"]), De_T=(e_["T_K"], e_["De"]),
+                                    dUdT0=tl["dUdT0"], dUdT_n=tl["dUdT_n"], dUdT_p=tl.get("dUdT_p", 0.0)))
+        T_cell = jnp.asarray(np.asarray(d["T"], float) + 273.15)
     ek.keep_x = bool(a.headroom_every_s)    # the states are needed for the charging headroom
     ek.innov_clip = None if a.innov_clip_mV is None else a.innov_clip_mV * 1e-3
     nel, nz = m.nel, m.nz
@@ -270,7 +287,7 @@ def main():
     sd_shell = a.p0_shell * np.concatenate([np.full(m.Nn, P["cmax_n"]), np.full(m.Np, P["cmax_p"])])
     sd_rest = np.concatenate([np.full(m.Nm * nel, 1.0), np.full(m.K * nel, 1.0), np.full(m.N, 3.0)])
     R = (a.sigma_mV * 1e-3) ** 2
-    run = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I, jnp.asarray(y_f), tfac=tfac, dts=dts))
+    run = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I, jnp.asarray(y_f), tfac=tfac, dts=dts, T_cell=T_cell))
     if a.th_hold_s and coords and a.start == "soc":
         # two time scales: the parameters are held at their prior values for the first th_hold_s seconds (negligible
         # variance, no random walk, no cross-covariance: only the DFN state, i.e. SOC, is corrected), then released with

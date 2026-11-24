@@ -31,10 +31,12 @@ from dfnekf import particles as pt  # noqa: E402
 from dfnekf.step import DFN  # noqa: E402
 
 F, R_GAS = 96485.33212, 8.314462618
-T_REF = 293.15
+T_REF = 273.15 + float(os.environ.get("LP_T_REF_C", "20"))   # reference temperature of the parameters (LG M50: 25 C)
 HERE = os.path.dirname(os.path.abspath(__file__))
-LM3C = os.path.join(DFNEKF, "data", "exp_Mohtat", "params", "mohtat_lm3c.json")
-Q_CELL = 1.95                                     # [A.h] window width used to place D_p's law end and the scaling
+LM3C = os.environ.get("LP_BASE_SET") or os.path.join(DFNEKF, "data", "exp_Mohtat", "params", "mohtat_lm3c.json")   # base cell set
+Q_CELL = float(os.environ.get("LP_Q_CELL", "1.95"))   # [A.h] window width used to place D_p's law end and the scaling
+BASE_Q = float(os.environ.get("LP_BASE_Q", "4.91"))   # [A.h] capacity of the base set's cell C01 (the area scale is Q_CELL / BASE_Q)
+DQ_LO, DQ_HI = (float(v) for v in os.environ.get("LP_DQ_RANGE", "-0.4,2.4").split(","))   # [A.h] range of the OCV inversion
 
 # nominal: lm3c per-area kinetics/diffusion, step-1 window (EIS 3 h rests, lm3c OCP tables)
 NOMINAL = dict(
@@ -62,9 +64,45 @@ BOUNDS = dict(
 
 
 def _table(x, U):
+    if os.environ.get("LP_OCP_SMOOTH", "0") == "1":
+        return _table_pchip(x, U)
     x, U = jnp.asarray(x, dtype=jnp.float64), jnp.asarray(U, dtype=jnp.float64)
     lo, hi = float(x[0]), float(x[-1])
     return lambda s: jnp.interp(jnp.clip(s, lo, hi), x, U)
+
+
+def _monotone(y, U, w=0.0025, slope_min=0.02):
+    """A cathode OCP from subtraction carries the measurement noise: short segments where U rises with y. Where the
+    curve is flat that noise makes dU/dc_s > 0, the rest equilibrium between particles unstable and the closure Newton
+    stalls (LP_OCP_MONO=1). Moving average over w in y, then strictly decreasing (slope at least slope_min V per unit y)."""
+    o = np.argsort(y); y, U = y[o], U[o]
+    dy = np.median(np.diff(y)); n = max(1, int(round(w / dy)))
+    k = np.ones(2 * n + 1) / (2 * n + 1)
+    Us = np.convolve(np.pad(U, n, mode="edge"), k, mode="valid")
+    for i in range(1, len(Us)):
+        Us[i] = min(Us[i], Us[i - 1] - slope_min * (y[i] - y[i - 1]))
+    return y, Us
+
+
+def _table_pchip(x, U):
+    """Monotone cubic Hermite (PCHIP) through the table points: C1, so the slope dU/ds has no jumps at the nodes.
+    With fast kinetics the closure root sits on U(c_s) itself; a piecewise-linear table puts a slope jump every node
+    and Newton can cycle between two segments (long rests near an empty anode, LP_OCP_SMOOTH=1)."""
+    from scipy.interpolate import PchipInterpolator
+    x, U = np.asarray(x, float), np.asarray(U, float)
+    o = np.argsort(x); x, U = x[o], U[o]
+    keep = np.r_[True, np.diff(x) > 0]; x, U = x[keep], U[keep]
+    d = PchipInterpolator(x, U).derivative()(x)
+    xj, Uj, dj = (jnp.asarray(a, dtype=jnp.float64) for a in (x, U, d))
+    lo, hi = float(x[0]), float(x[-1])
+
+    def f(s):
+        s = jnp.clip(s, lo, hi)
+        i = jnp.clip(jnp.searchsorted(xj, s, side="right") - 1, 0, len(x) - 2)
+        h = xj[i + 1] - xj[i]; t = (s - xj[i]) / h
+        h00 = (1 + 2 * t) * (1 - t) ** 2; h10 = t * (1 - t) ** 2; h01 = t ** 2 * (3 - 2 * t); h11 = t ** 2 * (t - 1)
+        return h00 * Uj[i] + h10 * h * dj[i] + h01 * Uj[i + 1] + h11 * h * dj[i + 1]
+    return f
 
 
 class Model:
@@ -77,22 +115,78 @@ class Model:
         # lumped thermal state (env LP_THERMAL=1, set by --thermal): the cell temperature is a state; every Arrhenius law,
         # the electrolyte conductivity, the Butler-Volmer temperature and the entropic term follow it
         self.thermal = os.environ.get("LP_THERMAL") == "1"
+        # measured temperature (env LP_TMEAS=1): the cell temperature, uniform in the cell, is the measured surface
+        # temperature of every step (prof["Tm"], C), an input; the same laws follow it as with the thermal state
+        self.tmeas = os.environ.get("LP_TMEAS") == "1"
+        if os.environ.get("LP_OCP_N"):              # anode OCP from a literature table (ocp_neg_select.py json: x, U)
+            tab = json.load(open(os.environ["LP_OCP_N"], encoding="utf-8"))
+            self.cs["ocp"]["n"] = dict(x=list(tab["x"]), U=list(tab["U"]), source=os.environ["LP_OCP_N"])
         self.ocp_n = _table(self.cs["ocp"]["n"]["x"], self.cs["ocp"]["n"]["U"])
         self.ocp_p = _table(self.cs["ocp"]["p"]["y"], self.cs["ocp"]["p"]["U"])
         self.ocp_p_source = "lm3c"
+        # measured entropic coefficient (env LP_DUDT_TABLE, ocv_temperature.py dUdT_table.json): dOCV/dT(x) [V/K],
+        # one table below T_REF and one above; replaces dUdT0 + dUdT_n (x - 0.5) in the voltage and in the OCV
+        self.dudt = None
+        if os.environ.get("LP_DUDT_TABLE"):
+            tb = json.load(open(os.environ["LP_DUDT_TABLE"], encoding="utf-8"))
+            lo_, hi_ = _table(tb["x_lo"], tb["dUdT_lo"]), _table(tb["x_hi"], tb["dUdT_hi"])
+            self.dudt = lambda x, dT: jnp.where(dT < 0, lo_(x), hi_(x))
         if os.environ.get("LP_OCP_P"):              # cathode OCP of this cell (ocp_sub.py), e.g. by subtraction
             tab = json.load(open(os.environ["LP_OCP_P"], encoding="utf-8"))
-            self.ocp_p = _table(tab["y"], tab["U"]); self.ocp_p_source = os.environ["LP_OCP_P"]
+            yy, UU = np.asarray(tab["y"], float), np.asarray(tab["U"], float)
+            if os.environ.get("LP_OCP_MONO", "0") == "1":
+                yy, UU = _monotone(yy, UU, float(os.environ.get("LP_OCP_MONO_W", "0.0025")))
+            self.ocp_p = _table(yy, UU); self.ocp_p_source = os.environ["LP_OCP_P"]
         c = self.cs["cells"]["C01"]
         P0 = self.cs["P"]
-        self.scale = Q_CELL / 4.91                # area ratio to the Mohtat cell (C01 C/20 capacity 4.91 A.h)
+        self.scale = Q_CELL / BASE_Q              # area ratio to the base cell (Mohtat C01: C/20 capacity 4.91 A.h)
         self.area = P0["area"] * self.scale
         self.j0n_ref = c["k0_n"] * 0.5 * c["cmax_n"] * np.sqrt(P0["ce0"])     # lm3c j0 at x = 0.5, c_e0 [A/m2]
         self.j0p_ref = c["k0_p"] * 0.5 * c["cmax_p"] * np.sqrt(P0["ce0"])
+        # parameter groups (the model reaches the voltage only through them; ApEn draft, Section 2.3), at T_REF:
+        #   theta_k = R_k^2 / D_s,k [s]; I0_k = A (3 eps_s,k / R_k) L_k j0_k(half stoichiometry, c_e0) [A];
+        #   R_e = (1/A)(L_n / 3 kappa_n,eff + L_s / kappa_s,eff + L_p / 3 kappa_p,eff) [Ohm], kappa_eff = eps^b kappa / tau_k;
+        #   tau_e = L_e^2 / D_e,eff in the separator [s], D_e,eff = eps_s^b D_e / tau_D. Stack shape (L, eps, b), radii,
+        #   t+, chi, c_e0 fixed (Mohtat lm3c). The base values are those of the multipliers = 1.
+        e = self.cs["temperature"]["electrolyte"]
+        kap = float(np.interp(T_REF, e["T_K"], e["kappa"])); De = float(np.interp(T_REF, e["T_K"], e["De"]))
+        b = P0["brug"]
+        self.G0 = dict(
+            I0_n=self.area * 3 * P0["eps_sn"] / P0["Rn"] * P0["Ln"] * self.j0n_ref,
+            I0_p=self.area * 3 * P0["eps_sp"] / P0["Rp"] * P0["Lp"] * self.j0p_ref,
+            R_e=(P0["Ln"] / (3 * kap * P0["eps_en"] ** b) + P0["Ls"] / (kap * P0["eps_es"] ** b)
+                 + P0["Lp"] / (3 * kap * P0["eps_ep"] ** b)) / self.area,
+            tau_e=(P0["Ln"] + P0["Ls"] + P0["Lp"]) ** 2 / (De * P0["eps_es"] ** b))
         self._jit = {}
+
+    GROUPS = ("theta_n", "theta_p", "I0_n", "I0_p", "R_e", "tau_e", "R_c")
+
+    def phys(self, p):
+        """p with the groups (GROUPS, where present) converted to the model's physical keys: Ds_n, Ds_p, k0_n, k0_p
+        (multipliers), tau_k, tau_D (factors on 1/kappa and 1/D_e), R_contact. Floats or jnp scalars."""
+        if not any(k in p for k in self.GROUPS):
+            return p
+        P0 = self.cs["P"]
+        q = dict(p)
+        if "theta_n" in p: q["Ds_n"] = P0["Rn"] ** 2 / p["theta_n"]
+        if "theta_p" in p: q["Ds_p"] = P0["Rp"] ** 2 / p["theta_p"]
+        if "I0_n" in p: q["k0_n"] = p["I0_n"] / self.G0["I0_n"]
+        if "I0_p" in p: q["k0_p"] = p["I0_p"] / self.G0["I0_p"]
+        if "R_e" in p: q["tau_k"] = p["R_e"] / self.G0["R_e"]
+        if "tau_e" in p: q["tau_D"] = p["tau_e"] / self.G0["tau_e"]
+        if "R_c" in p: q["R_contact"] = p["R_c"]
+        return q
+
+    def groups(self, p):
+        """The groups of a physical set p (inverse of phys, floats)."""
+        P0 = self.cs["P"]
+        tk, tD = p.get("tau_k", p.get("tau", 1.0)), p.get("tau_D", p.get("tau", 1.0))
+        return dict(theta_n=P0["Rn"] ** 2 / p["Ds_n"], theta_p=P0["Rp"] ** 2 / p["Ds_p"], I0_n=p["k0_n"] * self.G0["I0_n"],
+                    I0_p=p["k0_p"] * self.G0["I0_p"], R_e=tk * self.G0["R_e"], tau_e=tD * self.G0["tau_e"], R_c=p["R_contact"])
 
     # ---- parameters
     def params(self, p, T_C):
+        p = self.phys(p)
         P0 = self.cs["P"]
         T = float(T_C) + 273.15
         P = dict(P0)
@@ -107,13 +201,18 @@ class Model:
         P["k0_p"] = p["k0_p"] * self.j0p_ref / (0.5 * P["cmax_p"] * np.sqrt(P0["ce0"])) * fr
         P["R_contact"] = p["R_contact"] * np.exp(p["Ea_s"] * ark)
         e = self.cs["temperature"]["electrolyte"]
-        P["kappa"] = float(np.interp(T, e["T_K"], e["kappa"])) / p["tau"]
-        P["De"] = float(np.interp(T, e["T_K"], e["De"])) / p["tau"]
+        P["kappa"] = float(np.interp(T, e["T_K"], e["kappa"])) / p.get("tau_k", p.get("tau", 1.0))
+        P["De"] = float(np.interp(T, e["T_K"], e["De"])) / p.get("tau_D", p.get("tau", 1.0))
         P["T"] = T
         P["Rf0"] = 0.0
         P["soft_edges"] = True
+        # width of the soft c_s edges [fraction of c_max]: 1e-2 (closure.SAT_EPS 1e-3 is too sharp for a CV charge at 1C,
+        # where the anode surface at the separator saturates and Newton cannot move the reaction off it; only x_s > 0.97
+        # or < 0.03 are affected). LP_SOFT_EPS overrides (1e-3: the value of the fits up to v12 / m50_v4).
+        P["soft_eps"] = float(os.environ.get("LP_SOFT_EPS", "1e-2"))
         P["implicit_closure"] = True
         P["entropic"] = (T - T_REF, p["dUdT0"], p["dUdT_n"], 0.0)
+        P["entropic_fn"] = self.dudt
         y_end = min(p["y100"] + Q_CELL / p["Q_p"], 0.999)
         P["dp_law"] = dict(drop=float(p["drop"]), shape=float(p["shape"]), y0=float(p["y100"]), y1=float(y_end))
         P["ocp_n"], P["ocp_p"] = self.ocp_n, self.ocp_p
@@ -126,10 +225,15 @@ class Model:
         x = p["x100"] - dq / p["Q_n"]
         y = p["y100"] + dq / p["Q_p"]
         U = np.asarray(self.ocp_p(jnp.asarray(y))) - np.asarray(self.ocp_n(jnp.asarray(x)))
-        return U + (T_C + 273.15 - T_REF) * (p["dUdT0"] + p["dUdT_n"] * (x - 0.5))
+        dT = T_C + 273.15 - T_REF
+        if self.dudt is not None:
+            return U + dT * np.asarray(self.dudt(jnp.asarray(x), dT))
+        return U + dT * (p["dUdT0"] + p["dUdT_n"] * (x - 0.5))
 
-    def dq_from_ocv(self, p, T_C, V, lo=-0.4, hi=2.4, n=11201):     # 0.25 mAh grid, down to the bottom of the window
+    def dq_from_ocv(self, p, T_C, V, lo=None, hi=None, n=None):     # 0.25 mAh grid, down to the bottom of the window
         """Inverse of ocv on [lo, hi] A.h (monotone there): the start of a held-out test from its rested voltage."""
+        lo = DQ_LO if lo is None else lo; hi = DQ_HI if hi is None else hi
+        n = int(round((hi - lo) / 2.5e-4)) + 1 if n is None else n
         q = np.linspace(lo, hi, n)
         v = self.ocv(p, T_C, q)
         V = V - p.get("hys_H", 0.0)      # every test starts rested after a charge: on the charge branch (OCV + H)
@@ -168,6 +272,7 @@ class Model:
     # ---- differentiable twins (exact-gradient fits): p holds jnp scalars, T_C is a constant of the test
     def traced_jax(self, p, T_C, dq):
         """traced() in jnp: the leaves as differentiable functions of the fit groups p (dict of jnp scalars) and dq."""
+        p = self.phys(p)
         P0 = self.cs["P"]
         T = float(T_C) + 273.15
         ark = (1.0 / T - 1.0 / T_REF) / R_GAS
@@ -181,7 +286,8 @@ class Model:
             k0_n=p["k0_n"] * self.j0n_ref / (0.5 * cmax_n * np.sqrt(P0["ce0"])) * fr,
             k0_p=p["k0_p"] * self.j0p_ref / (0.5 * cmax_p * np.sqrt(P0["ce0"])) * fr,
             R_contact=p["R_contact"] * jnp.exp(p["Ea_s"] * ark),
-            kappa=float(np.interp(T, e["T_K"], e["kappa"])) / p["tau"], De=float(np.interp(T, e["T_K"], e["De"])) / p["tau"],
+            kappa=float(np.interp(T, e["T_K"], e["kappa"])) / p.get("tau_k", p.get("tau", 1.0)),
+            De=float(np.interp(T, e["T_K"], e["De"])) / p.get("tau_D", p.get("tau", 1.0)),
             T=jnp.asarray(T), dT=jnp.asarray(T - T_REF), dUdT0=p["dUdT0"], dUdT_n=p["dUdT_n"],
             c0n=(p["x100"] - dq / p["Q_n"]) * cmax_n, c0p=(p["y100"] + dq / p["Q_p"]) * cmax_p,
             law_drop=p["drop"], law_shape=p["shape"], law_y0=p["y100"],
@@ -192,7 +298,10 @@ class Model:
 
     def ocv_jax(self, p, T_C, dq):
         x = p["x100"] - dq / p["Q_n"]; y = p["y100"] + dq / p["Q_p"]
-        return self.ocp_p(y) - self.ocp_n(x) + (T_C + 273.15 - T_REF) * (p["dUdT0"] + p["dUdT_n"] * (x - 0.5))
+        dT = T_C + 273.15 - T_REF
+        if self.dudt is not None:
+            return self.ocp_p(y) - self.ocp_n(x) + dT * self.dudt(x, dT)
+        return self.ocp_p(y) - self.ocp_n(x) + dT * (p["dUdT0"] + p["dUdT_n"] * (x - 0.5))
 
     def dq_from_ocv_jax(self, p, T_C, V):
         """dq_from_ocv with IFT derivatives: the grid inversion (no gradient), then one Newton correction on
@@ -204,7 +313,9 @@ class Model:
         slope = sg(jax.grad(lambda d: self.ocv_jax(ps, T_C, d))(dq0))
         return dq0 - (self.ocv_jax(p, T_C, dq0) - Vd) / slope
 
-    def _dq_grid_jax(self, p, T_C, V, lo=-0.4, hi=2.4, n=11201):
+    def _dq_grid_jax(self, p, T_C, V, lo=None, hi=None, n=None):
+        lo = DQ_LO if lo is None else lo; hi = DQ_HI if hi is None else hi
+        n = int(round((hi - lo) / 2.5e-4)) + 1 if n is None else n
         q = jnp.linspace(lo, hi, n)
         v = self.ocv_jax(p, T_C, q)
         return jax.lax.stop_gradient(q[jnp.argmin(jnp.abs(v - V))])
@@ -227,7 +338,7 @@ class Model:
         m.jMdiff = (jnp.asarray(A_.Dm) @ (Kde[:, None] * jnp.asarray(A_.Gm))) / jnp.asarray(A_.eps * A_.dx)[:, None]
         return m
 
-    def _run(self, q, I, dt, idx, full):
+    def _run(self, q, I, dt, idx, full, Tm=None):
         m = self._bind(q)
         P, A_ = m.P, m.A
         Nn_, Nm, K = m.Nn, m.Nm, self.K
@@ -238,19 +349,22 @@ class Model:
         kf = lambda C: (3.0 * C["dt"] / C["R"] + jnp.sum(C["gain"], 0) + jnp.sum((1 - C["rho"]) * C["W"], 0)) / F
 
         thermal = self.thermal
+        tmeas = self.tmeas and Tm is not None
         T0 = q["T"]
-        if thermal:
+        if thermal or tmeas:
             e_ = self.cs["temperature"]["electrolyte"]
             kT, kV = jnp.asarray(e_["T_K"]), jnp.asarray(e_["kappa"])
             kap0 = jnp.interp(T0, kT, kV)
 
         def body(carry, xs):
             z, g, h, Tc = carry
-            Ik, dtk, k = xs
+            Ik, dtk, k, Tmk = xs
+            if tmeas:
+                Tc = Tmk + 273.15                      # measured surface temperature, uniform in the cell
             c, a, s, ce = m.split(z)
             mm, AA = m, A_
             Ds_n = P["Ds_n"]
-            if thermal:                                # parameters at the cell temperature Tc (computed at T0 = chamber)
+            if thermal or tmeas:                       # parameters at the cell temperature Tc (computed at T0 = chamber)
                 ark = (1.0 / Tc - 1.0 / T0) / R_GAS
                 fr = jnp.exp(-q["Ea_r"] * ark); rk = jnp.interp(Tc, kT, kV) / kap0
                 Ds_n = P["Ds_n"] * jnp.exp(-q["Ea_Dn"] * ark)
@@ -271,7 +385,7 @@ class Model:
             V = AA.V_of(g, Ik, csn, csp) + h
             if thermal:                                # heat: I (U - V) - I T dU/dT; exact step of C dT/dt = Q - hA (T - T0)
                 xb = jnp.mean(c[:Nn_]) / P["cmax_n"]; yb = jnp.mean(c[Nn_:]) / P["cmax_p"]
-                dUdT = q["dUdT0"] + q["dUdT_n"] * (xb - 0.5)
+                dUdT = self.dudt(xb, Tc - T_REF) if self.dudt is not None else q["dUdT0"] + q["dUdT_n"] * (xb - 0.5)
                 U = self.ocp_p(yb) - self.ocp_n(xb) + (Tc - T_REF) * dUdT
                 Qh = Ik * (U - V) - Ik * Tc * dUdT
                 ed = jnp.exp(-dtk * q["th_hA"] / q["th_C"])
@@ -291,7 +405,8 @@ class Model:
             g0 = sg(As.newton(As.guess(a0[0], a0[1], a0[3], a0[4]), *a0)[0])
         else:
             g0 = A_.newton(A_.guess(csn0, csp0, I[0], th), csn0, csp0, ce0, I[0], th)[0]
-        return jax.lax.scan(body, (z0, g0, jnp.asarray(q["hys_H"], dtype=jnp.float64), jnp.asarray(T0, dtype=jnp.float64)), (I, dt, idx))[1]   # h0 = H: rested after a charge
+        Tm = jnp.zeros_like(I) if Tm is None else Tm
+        return jax.lax.scan(body, (z0, g0, jnp.asarray(q["hys_H"], dtype=jnp.float64), jnp.asarray(T0, dtype=jnp.float64)), (I, dt, idx, Tm))[1]   # h0 = H: rested after a charge
 
     def simulate(self, p, prof, T_C, dq=None, full=False):
         """prof: dict(I [A, dis. > 0], dt [s], idx [int into self.dts]) per model step. Returns V [n] (full: V, ||F||,
@@ -299,9 +414,10 @@ class Model:
         key = (len(prof["I"]), bool(full))
         self._base()                                   # built outside any trace (its jnp constants must be concrete)
         if key not in self._jit:
-            self._jit[key] = jax.jit(lambda q, I, dt, idx: self._run(q, I, dt, idx, full))
+            self._jit[key] = jax.jit(lambda q, I, dt, idx, Tm: self._run(q, I, dt, idx, full, Tm))
+        Tm = jnp.asarray(prof["Tm"]) if (self.tmeas and "Tm" in prof) else None
         out = self._jit[key](self.traced(p, T_C, dq), jnp.asarray(prof["I"]), jnp.asarray(prof["dt"]),
-                             jnp.asarray(prof["idx"]))
+                             jnp.asarray(prof["idx"]), Tm)
         out = [np.asarray(o) for o in out]
         return out if full else out[0]
 
@@ -324,6 +440,8 @@ def prepare(d, start_step=0, end_step=None, fast_window=30.0, rest_mid=300.0, i_
     cnt = np.bincount(b, minlength=nb)
     ok = cnt > 0
     Ib = np.bincount(b, weights=I, minlength=nb)[ok] / cnt[ok]
+    Tm_ = d.get("T_meas")
+    Tb = np.bincount(b, weights=np.asarray(Tm_)[keep], minlength=nb)[ok] / cnt[ok] if Tm_ is not None else np.full(len(Ib), np.nan)
     last = np.zeros(nb, dtype=int); last[b] = np.arange(len(t))          # last sample index per bin
     Vb = V[last[ok]]; sb = st[last[ok]]; tb = edges[ok] + 1.0
     # time since the last current change, and the type of each 1-s bin
@@ -337,7 +455,7 @@ def prepare(d, start_step=0, end_step=None, fast_window=30.0, rest_mid=300.0, i_
     # under current always 1 s (5-s steps under load: up to 48 mV off the 1-s run near the end of discharge)
     want = np.where(~rest | (tc <= fast_window), 0, np.where(tc > rest_mid, 2, 1))
     # merge consecutive bins of class 1/2 into 5/20-s steps (break at changes)
-    outI, outdt, outidx, outV, outt, outs = [], [], [], [], [], []
+    outI, outdt, outidx, outV, outt, outs, outT = [], [], [], [], [], [], []
     i, n = 0, len(Ib)
     while i < n:
         k = want[i]
@@ -347,9 +465,9 @@ def prepare(d, start_step=0, end_step=None, fast_window=30.0, rest_mid=300.0, i_
             j += 1
         if j - i < L:            # incomplete block: emit 1-s steps
             for q in range(i, j):
-                outI.append(Ib[q]); outdt.append(1.0); outidx.append(0); outV.append(Vb[q]); outt.append(tb[q]); outs.append(sb[q])
+                outI.append(Ib[q]); outdt.append(1.0); outidx.append(0); outV.append(Vb[q]); outt.append(tb[q]); outs.append(sb[q]); outT.append(Tb[q])
         else:
-            outI.append(Ib[i:j].mean()); outdt.append(float(L)); outidx.append(k); outV.append(Vb[j - 1]); outt.append(tb[j - 1]); outs.append(sb[j - 1])
+            outI.append(Ib[i:j].mean()); outdt.append(float(L)); outidx.append(k); outV.append(Vb[j - 1]); outt.append(tb[j - 1]); outs.append(sb[j - 1]); outT.append(Tb[i:j].mean())
         i = j
     return dict(I=np.array(outI), dt=np.array(outdt), idx=np.array(outidx, dtype=int), V=np.array(outV),
-                t=np.array(outt), step=np.array(outs), names=d["names"], test=d["test"])
+                t=np.array(outt), step=np.array(outs), names=d["names"], test=d["test"], Tm=np.array(outT))

@@ -52,7 +52,9 @@ def soc_reference(t, I, min_charge_s=600.0, q_window=None):
     for i in range(1, len(caps)):                         # a discharge cut short by the end of the record: previous scale
         if caps[i] < 0.8 * caps[i - 1]:
             caps[i] = caps[i - 1]
-    if q_window:                                          # full scale = the OCV window (stoichiometric SOC), not the 1C capacity
+    if q_window is not None and np.ndim(q_window) == 1:   # per-sample window (aged: the run's Q_window_Ah) read at each anchor
+        caps = [float(q_window[k]) for k in anchors]
+    elif q_window:                                        # full scale = the OCV window (stoichiometric SOC), not the 1C capacity
         caps = [q_window] * len(caps)
     ref = np.full(len(I), np.nan)
     if not anchors:

@@ -144,5 +144,24 @@ lithium drift 2e-7. C++ float (UD) against it over the whole run: V 0.25 mV, SOC
 On the board (2026-11-09/10, 7.8 h for the 66 h record): Rf = 8.60 ± 0.18, LLI = 0.3123 ± 0.0003 at the end; against
 Python over all 47 609 steps V 0.21 mV, SOC 0.002 %, Rf 0.007, LLI 5e-5; 0.58 s per step (median), 0.78 s max.
 
+## Paper filter (Rf + LLI + voltage bias Vb, two time scales)
+
+The filter of the paper's EKF runs (`results/exp_LP604765/rfli_an_mohtat`, set fit_an_Mohtat2020), exported with
+`export_model.py --set <fit_an_Mohtat2020 cellset> --coords Rf,LLI,Vb --li-sigma-Ah 1e-4 --soc-vlim 4.2,3.0
+--sigma-mV 30 --q-vb-mV 1 --q-shell 1e-4 --y-every-s 300 --y-burn-s 600 --th-hold-s 7200 --p0-th-release 0.3
+--q-th 1e-5 --innov-clip-mV 90 --soft-eps 1e-2 --hold-vb` (tag `lp604765_T20_10-6-10_m3k1_RfLLIVb_CYC20`, the board's
+model since 2026-11-18). In the C++ (`ekf.h`):
+- Vb: a third coordinate, V = V_model + Vb (Jacobian column 1 on the voltage row), random walk 1 mV per sqrt(s);
+- shell noise on the particle means: extra noise rows of the UD time update (header `NQZ`, `IQZ`);
+- hold: the coordinates start at 1e-8 of their prior variance with no random walk, so only the SOC is corrected;
+  `EKF::release()` after `hold_s` gives them 0.3 of the prior sd and zeroes their cross-covariances, in UD form by MWGS
+  on [M U | e_h] (a dense re-factorization of P failed: after 2 h with the lithium constraint P is near singular);
+- innovation clip (90 mV) on the state correction; the voltage update once per 300 s after a 600 s burn-in (the
+  firmware's schedule, `main.cpp`; the golden's `upd` column in the host test).
+CYC20 from a 0.4 A.h start error, 6645 steps of 5 s, 228 voltage updates: C++ float (UD) against Python SOC 0.0007 %,
+V 0.10 mV, Rf 9e-5, LLI 2.5e-6, Vb 0.011 mV; SOC vs Coulomb counting 0.42 % rms over the second half. The temperature
+goldens of this set stop at Python's first unconverged closure step (Ea_r, Ea_Dp at 90 kJ/mol: a 62 mV jump at
+constant current at the end of the 1C discharge, at 40 degC); before it C++ and Python agree (0.0006 mV at 40 degC).
+
 After flashing, the board enumerates on a different COM port (USB ID 2886:8044, the stock firmware is 2886:8045).
 PlatformIO links the USB serial only when the sketch includes `Adafruit_TinyUSB.h`.

@@ -24,29 +24,49 @@ static const real_t dshift = 0, li_ref = 0, li_sigma = 0;
 static const real_t li_w[NZ] = {};
 }  // namespace dfn_model
 #endif
+#ifndef DFN_MODEL_VB                       // headers exported before the voltage bias and the two time scales
+namespace dfn_model {
+constexpr int ITH_VB = -1;                 // voltage bias coordinate (-1: none)
+constexpr int NQZ = 0;                     // state entries with process noise (Q_sd > 0 on z)
+static const int IQZ[1] = {0};
+static const real_t innov_clip = 0;        // [V] limit on the innovation of the state update (0: off)
+static const real_t hold_s = 0, p0_release = 1, y_every_s = 0, y_burn_s = 0;
+constexpr int hold_vb = 0;
+}  // namespace dfn_model
+#endif
 
 namespace dfn {
 
 // Coordinates (header: NTH, ITH_LLI): Rf first (log of the film multiplier), then LLI when estimated (linear, in units of
 // the anode window: the closure sees the anode means lowered by LLI dshift). With li_sigma > 0, after the voltage update,
 // the state's total lithium (li_w . z) is measured equal to li_ref with relative sd li_sigma (dfnekf.ekf.EKF li_sigma).
+// Vb (header ITH_VB, dfnekf.ekf.EKF "Vb"): an additive voltage bias [V], V = V_model + Vb, random walk; it absorbs the
+// slowly varying model-plant mismatch so that it does not go into SOC, Rf or LLI.
+// Two time scales (scripts/ekf_exp.py --th-hold-s): with hold_s > 0 the coordinates start held (variance 1e-8 of the
+// prior, no random walk; Vb too when hold_vb), so only the DFN state (SOC) is corrected; release() then gives them
+// p0_release x their prior sd, cross-covariances with the state zeroed, and their random walk.
 constexpr int NX = NZ + NTH;
 constexpr int NR = NEL + NP;
 constexpr int ITH = NZ;                    // index of the Rf coordinate
 constexpr int ILLI = ITH_LLI >= 0 ? NZ + ITH_LLI : -1;
+constexpr int IVB = ITH_VB >= 0 ? NZ + ITH_VB : -1;
+constexpr int NQ = NQZ + NTH;              // noise rows of the UD time update: the state entries IQZ, then the coordinates
 
 struct EkfOut {
     real_t V, innov, Sy, soc, sd_soc, Rf, sd_Rf, res, min_diag;
     real_t LLI, sd_LLI, li_innov;          // LLI (0 when not estimated), lithium innovation [relative]
+    real_t Vb, sd_Vb;                      // voltage bias [V] (0 when not estimated)
+    real_t ldp;                            // lithium deposition potential at the anode/separator interface [V]
     int nit;
 };
 
 class EKF {
 public:
     real_t x[NX];
+    bool held = false;                     // coordinates held (two time scales), until release()
 #if DFN_COV_UD
-    real_t U[NX + NTH][NX];                // unit upper triangular (rows NX..: the noise rows of the time update)
-    real_t D[NX + NTH];
+    real_t U[NX + NQ][NX];                 // unit upper triangular (rows NX..: the noise rows of the time update)
+    real_t D[NX + NQ];
 #else
     real_t P[NX][NX];
     real_t PV[NX][NR], Wb[NX][NR];
@@ -60,18 +80,24 @@ public:
     StepConsts C;
     ClosureIn in;
     Closure cl;
-    real_t w_ws[NX], w_ld[NX], w_fv[NX], w_v[NX], w_b[NX], w_t[NX], w_Dw[NX + NTH], w_z[NZ], w_h[NX];   // work arrays
+    real_t w_ws[NX], w_ld[NX], w_fv[NX], w_v[NX], w_b[NX], w_t[NX], w_Dw[NX + NQ], w_z[NZ], w_h[NX];   // work arrays
     real_t R;
+    // tuning at run time: factors on the sd of the process noise (every Q_sd entry) and of the voltage noise
+    // (R = (r_mult sigma)^2); kept across init()
+    real_t q_mult = 1, r_mult = 1;
+    void set_noise(real_t qm, real_t rm) { q_mult = qm; r_mult = rm; R = R_meas * rm * rm; }
     real_t jitter;
     real_t ce_floor;
 
-    // x0: initial state (NZ), the Rf coordinate c0 (the others from the header's C0); P0 from the header:
-    // diag(P0_sd^2) + p0_q^2 dz_dq dz_dq^T (z block)
-    void init(const real_t* z0, real_t c0, int idt0, real_t I0) {
+    // x0: initial state (NZ), the Rf coordinate c0 (the others from the header's C0, or all NTH from cs when given);
+    // P0 from the header: diag(P0_sd^2) + p0_q^2 dz_dq dz_dq^T (z block). With hold_s > 0 the coordinates start held.
+    void init(const real_t* z0, real_t c0, int idt0, real_t I0, const real_t* cs = nullptr) {
         for (int i = 0; i < NZ; ++i) x[i] = z0[i];
         x[ITH] = c0;
         for (int k = 1; k < NTH; ++k) x[NZ + k] = C0_of(k);
-        R = R_meas; jitter = (real_t)1e-12; ce_floor = (real_t)20;
+        if (cs) for (int k = 0; k < NTH; ++k) x[NZ + k] = cs[k];
+        R = R_meas * r_mult * r_mult; jitter = (real_t)1e-12; ce_floor = (real_t)20;
+        held = hold_s > 0;
 #if DFN_COV_UD
         real_t (*P)[NX] = U;                                      // P0 built in U's storage, factorized in place
 #endif
@@ -79,7 +105,7 @@ public:
             for (int j = 0; j < NX; ++j) {
                 real_t v = 0;
                 if (i < NZ && j < NZ) v = p0_q * p0_q * dz_dq[i] * dz_dq[j];
-                if (i == j) v += P0_sd[i] * P0_sd[i];
+                if (i == j) v += P0_sd[i] * P0_sd[i] * (held && is_held(i) ? (real_t)1e-8 : (real_t)1);
                 P[i][j] = v / (scale[i] * scale[j]);
             }
 #if DFN_COV_UD
@@ -92,6 +118,44 @@ public:
         cl.guess(in, in.I, g);
         int k;
         cl.newton(g, in, (creal_t)DFN_NEWTON_TOL, 60, &k);
+    }
+
+    // a coordinate the hold applies to: every coordinate, the voltage bias only with hold_vb (else it stays free)
+    static bool is_held(int i) { return i >= NZ && (i != IVB || hold_vb); }
+
+    // end of the hold (scripts/ekf_exp.py): the held coordinates get p0_release x their prior sd, their
+    // cross-covariances (with the state and with each other) zeroed; a free Vb keeps its covariance
+    void release() {
+        if (!held) return;
+        held = false;
+#if DFN_COV_UD
+        // P' = M P M^T + diag(t) on the held coordinates, M zeroing their rows, in UD form without forming P (a dense
+        // re-factorization fails: after hours with the lithium constraint P is near singular): MWGS on
+        // W = [M U | e_h] with weights [D, t], as the time update
+        real_t* Dw = w_Dw;
+        for (int i = 0; i < NX; ++i)                                 // U <- U^T: row k = column k of U
+            for (int j = i + 1; j < NX; ++j) { real_t a = U[i][j]; U[i][j] = U[j][i]; U[j][i] = a; }
+        for (int k = 0; k < NX; ++k) {
+            for (int i = 0; i < NX; ++i) if (is_held(i)) U[k][i] = 0;
+            Dw[k] = D[k];
+        }
+        for (int q = 0; q < NTH; ++q) {
+            const int e = NZ + q;
+            for (int i = 0; i < NX; ++i) U[NX + q][i] = 0;
+            U[NX + q][e] = 1;
+            const real_t t = P0_sd[e] * p0_release / scale[e];
+            Dw[NX + q] = is_held(e) ? t * t : (real_t)0;
+        }
+        mwgs(NX + NTH);
+#else
+        for (int i = 0; i < NX; ++i)
+            for (int j = i; j < NX; ++j) {
+                if (!(is_held(i) || is_held(j))) continue;
+                real_t v = 0;
+                if (i == j) v = (P0_sd[i] * p0_release / scale[i]) * (P0_sd[i] * p0_release / scale[i]);
+                P[i][j] = v; P[j][i] = v;
+            }
+#endif
     }
 
     static real_t C0_of(int k) {
@@ -258,14 +322,19 @@ public:
             for (int i = 0; i < NX; ++i) U[k][i] = t[i];
             Dw[k] = D[k];
         }
-        for (int q = 0; q < NTH; ++q) {                              // noise rows: random walk of each coordinate
+        for (int q = 0; q < NQ; ++q) {                               // noise rows: the state entries IQZ (shell noise),
+            const int e = q < NQZ ? IQZ[q < NQZ ? q : 0] : NZ + (q - NQZ);   // then the random walk of each coordinate
             for (int i = 0; i < NX; ++i) U[NX + q][i] = 0;
-            U[NX + q][NZ + q] = 1;
-            const real_t qs = Q_sd[NZ + q] / scale[NZ + q];
-            Dw[NX + q] = qs * qs;
+            U[NX + q][e] = 1;
+            const real_t qs = q_mult * Q_sd[e] / scale[e];
+            Dw[NX + q] = (held && is_held(e)) ? (real_t)0 : qs * qs;
         }
         (void)qth;
-        constexpr int NW = NX + NTH;
+        mwgs(NX + NQ);
+    }
+    // Thornton's modified weighted Gram-Schmidt: W^T in U's rows 0..NW-1 with weights w_Dw -> P = W diag(Dw) W^T = U D U^T
+    void mwgs(int NW) {
+        real_t *t = w_t, *Dw = w_Dw;
         for (int j = NX - 1; j >= 0; --j) {                          // MWGS from the last row of W
             real_t sg = 0;
             for (int k = 0; k < NW; ++k) sg += U[k][j] * U[k][j] * Dw[k];
@@ -334,6 +403,8 @@ public:
                 for (int i = 0; i < NN; ++i) sa += Swc[o][i];
                 Cth[o][ILLI - NZ] = -(real_t)dshift * sa;
             }
+        if (IVB >= 0)                                                // dV/dVb = 1; the fluxes do not depend on it
+            for (int o = 0; o < NO; ++o) Cth[o][IVB >= 0 ? IVB - NZ : 0] = o == NEL ? (real_t)1 : (real_t)0;
         // Lambda diagonal
         for (int i = 0; i < NEL; ++i) {
             dvec[IC + i] = 1;
@@ -398,7 +469,8 @@ public:
         shift_lli(ILLI >= 0 ? x[ILLI >= 0 ? ILLI : 0] : (real_t)0);
         out.res = (real_t)cl.solve(g, in);
         out.nit = cl.nit_last;
-        out.V = (real_t)cl.V_of(g, in.I, in);
+        out.V = (real_t)cl.V_of(g, in.I, in) + vbias();
+        out.ldp = ldp_of(Rf_mult);
         advance(z, g, C, f);
         for (int k = 0; k < NTH; ++k) f[NZ + k] = x[NZ + k];      // coordinates: random walks (Phi = identity)
         linearize(z, Rf_mult);
@@ -414,14 +486,27 @@ public:
         shift_lli(ILLI >= 0 ? x[ILLI >= 0 ? ILLI : 0] : (real_t)0);
         out.res = (real_t)cl.solve(g, in);
         out.nit = cl.nit_last;
-        out.V = (real_t)cl.V_of(g, in.I, in);
+        out.V = (real_t)cl.V_of(g, in.I, in) + vbias();
+        out.ldp = ldp_of(r_exp(x[ITH]));
         advance(z, g, C, x);
         out.soc = soc_of_ybar(ybar(x));
-        out.innov = out.Sy = out.sd_soc = out.sd_Rf = out.min_diag = out.sd_LLI = out.li_innov = 0;
+        out.innov = out.Sy = out.sd_soc = out.sd_Rf = out.min_diag = out.sd_LLI = out.li_innov = out.sd_Vb = 0;
         out.Rf = r_exp(x[ITH]);
         out.LLI = ILLI >= 0 ? x[ILLI >= 0 ? ILLI : 0] : (real_t)0;
+        out.Vb = vbias();
         return out;
     }
+    // LDP (step.DFN.interface, phi_pl): phi_s - phi_e - Rf j on the anode cells, extrapolated linearly from the last two
+    // cell centres to the separator; plating is favoured where it is below 0. From the converged closure g.
+    real_t ldp_of(real_t Rf_mult) const {
+        static_assert(NN >= 2, "LDP needs two anode cells");
+        const creal_t Rf = (creal_t)Rf0 * (creal_t)Rf_mult;
+        const creal_t v0 = g[OSN + NN - 2] - (g[OPE + NN - 2] + cl.ref_pe) - Rf * g[NN - 2];   // phi_e = g + ref_pe
+        const creal_t v1 = g[OSN + NN - 1] - (g[OPE + NN - 1] + cl.ref_pe) - Rf * g[NN - 1];
+        const creal_t f = (creal_t)dxn[NN - 1] / ((creal_t)dxn[NN - 1] + (creal_t)dxn[NN - 2]);
+        return (real_t)(v1 + f * (v1 - v0));
+    }
+    real_t vbias() const { return IVB >= 0 ? x[IVB >= 0 ? IVB : 0] : (real_t)0; }
 
     // lithium pseudo-measurement after the voltage update (du holds that update's correction): Li(x + scale du) = li_ref
     // +- li_sigma li_ref; adds its correction to du. Returns the relative innovation (0 when off).
@@ -469,6 +554,8 @@ public:
         EkfOut out;
         predict_lin(I, idt, out);
         out.innov = y - out.V;
+        real_t iu = out.innov;                                       // innovation of the state update (clipped)
+        if (innov_clip > 0) iu = iu > innov_clip ? innov_clip : iu < -innov_clip ? -innov_clip : iu;
         real_t* ws = w_ws;                                           // SOC read-out weights (scaled)
         for (int i = 0; i < NX; ++i) ws[i] = 0;
         for (int i = 0; i < NP; ++i) ws[IC + NN + i] = w_p[i] * scale[IC + NN + i];
@@ -477,7 +564,7 @@ public:
         if (valid) {
             real_t Sy = ud_update(hs, R, Kg);
             out.Sy = r_sqrt(Sy);
-            for (int i = 0; i < NX; ++i) du[i] = Kg[i] * out.innov;
+            for (int i = 0; i < NX; ++i) du[i] = Kg[i] * iu;
         } else {
             out.Sy = r_sqrt(quad(hs) + R);
             for (int i = 0; i < NX; ++i) du[i] = 0;
@@ -485,12 +572,13 @@ public:
         out.li_innov = lithium_update();
         real_t vv = quad(ws), pth = P_ii(ITH), md = D[0];
         real_t pl = ILLI >= 0 ? P_ii(ILLI) : (real_t)0;
+        real_t pv = IVB >= 0 ? P_ii(IVB) : (real_t)0;
         for (int i = 1; i < NX; ++i) if (D[i] < md) md = D[i];
 #else
         // ---- update (rank 1, Joseph form written symmetric)
         if (valid) {
             out.Sy = r_sqrt(joseph_update(hs, R, Kg));
-            for (int i = 0; i < NX; ++i) du[i] = Kg[i] * out.innov;
+            for (int i = 0; i < NX; ++i) du[i] = Kg[i] * iu;
         } else {
             real_t Sy = R;
             for (int i = 0; i < NX; ++i)
@@ -501,6 +589,7 @@ public:
         out.li_innov = lithium_update();
         real_t vv = 0, pth = P[ITH][ITH], md = P[0][0];
         real_t pl = ILLI >= 0 ? P[ILLI >= 0 ? ILLI : 0][ILLI >= 0 ? ILLI : 0] : (real_t)0;
+        real_t pv = IVB >= 0 ? P[IVB >= 0 ? IVB : 0][IVB >= 0 ? IVB : 0] : (real_t)0;
         for (int i = 0; i < NX; ++i) {
             if (ws[i] == 0) continue;
             for (int j = 0; j < NX; ++j) vv += ws[i] * P[i][j] * ws[j];
@@ -517,6 +606,9 @@ public:
         constexpr int IL = ILLI >= 0 ? ILLI : 0;
         out.LLI = ILLI >= 0 ? x[IL] + scale[IL] * du[IL] : (real_t)0;
         out.sd_LLI = ILLI >= 0 ? r_sqrt(pl) * scale[IL] : (real_t)0;
+        constexpr int IV = IVB >= 0 ? IVB : 0;
+        out.Vb = IVB >= 0 ? x[IV] + scale[IV] * du[IV] : (real_t)0;
+        out.sd_Vb = IVB >= 0 ? r_sqrt(pv) * scale[IV] : (real_t)0;
         out.min_diag = md;
         // ---- prediction
         const real_t qth = (Q_sd[ITH] / scale[ITH]) * (Q_sd[ITH] / scale[ITH]);
@@ -559,7 +651,8 @@ public:
                 }
             }
         for (int i = 0; i < NX; ++i) {
-            const real_t q = Q_sd[i] / scale[i];
+            if (held && is_held(i)) continue;
+            const real_t q = q_mult * Q_sd[i] / scale[i];
             P[i][i] += q * q;
         }
 #endif

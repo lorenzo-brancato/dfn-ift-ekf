@@ -126,7 +126,7 @@ class Problem:
 
 
 def morris_starts(prof, n):
-    f = os.path.join(C.RES, "sens", "morris_runs.pkl")
+    f = os.path.join(C.RES, "sens_groups" if getattr(C, "GROUP_MODE", False) else "sens", "morris_runs.pkl")
     if not os.path.exists(f) or n <= 0:
         return []
     d = pickle.load(open(f, "rb"))

@@ -224,7 +224,7 @@ def nest(a):
 
 
 # ------------------------------------------------------------------ filter (scripts/ekf_exp.py --start soc)
-TRUE = {"Rf": 1.0, "LLI": 0.0}            # identified (beginning-of-life) values, as scripts/ekf_exp.py
+TRUE = {"Rf": 1.0, "LLI": 0.0, "Vb": 0.0}  # identified (beginning-of-life) values, as scripts/ekf_exp.py
 
 
 def filter_setup(a, m, cs, cell, P, d):
@@ -245,14 +245,24 @@ def filter_setup(a, m, cs, cell, P, d):
     v[:Nn] = -P["cmax_n"] / c["Q_n"]; v[Nn:nel] = P["cmax_p"] / c["Q_p"]
     th1 = jnp.array([1.0, 1.0, 1.0])
     li_ref = float(m.lithium(m.init_state(*cellset.c0_at(cs, cell, 0.0)), th1))
+    if getattr(a, "li_sigma_Ah", None):       # [A.h] -> relative (scripts/ekf_exp.py --li-sigma-Ah)
+        li_sigma = a.li_sigma_Ah / (li_ref * P["area"] * F / 3600.0)
     ek = EKF(m, coords=coords, fixed=dict(Rf=1.0, LAM=0.0, Ds=1.0), transform="free", li_sigma=li_sigma, li_ref=li_ref)
+    ek.innov_clip = (a.innov_clip_mV * 1e-3) if getattr(a, "innov_clip_mV", None) else None
     rng_w = np.array([RANGE[k][1] - RANGE[k][0] for k in coords])
     c0 = ek.coord_of(np.array([TRUE[k] for k in coords])); dc = np.asarray(ek.dval_dc(jnp.asarray(c0)))
     sd_shell = a.p0_shell * np.concatenate([np.full(Nn, P["cmax_n"]), np.full(Np, P["cmax_p"])])
     sd_rest = np.concatenate([np.full(Nm * nel, 1.0), np.full(K * nel, 1.0), np.full(N, 3.0)])
     p0_th = a.p0_th * rng_w / dc
+    q_shell = getattr(a, "q_shell", 0.0)
+    qz = np.zeros(nz)                         # shell noise (scripts/ekf_exp.py --q-shell): random walk on the particle means
+    qz[:Nn] = q_shell * P["cmax_n"] * np.sqrt(m.dt); qz[Nn:nel] = q_shell * P["cmax_p"] * np.sqrt(m.dt)
+    Qsd = np.r_[qz, a.q_th * rng_w * np.sqrt(m.dt) / dc]
+    if "Vb" in coords:                        # the voltage bias: its own prior sd and random walk [V]
+        iv = coords.index("Vb")
+        p0_th[iv] = a.p0_vb_mV * 1e-3 / dc[iv]
+        Qsd[nz + iv] = a.q_vb_mV * 1e-3 * np.sqrt(m.dt) / dc[iv]
     P0sd = np.r_[sd_shell, sd_rest, p0_th]
-    Qsd = np.r_[np.zeros(nz), a.q_th * rng_w * np.sqrt(m.dt) / dc]
     scale = np.concatenate([np.full(nel, SCALE["c"]), np.full(Nm * nel, SCALE["a"]), np.full(K * nel, SCALE["s"]),
                             np.full(N, SCALE["e"]), np.full(len(coords), SCALE["th"])])
     p0_q = a.p0_q if start == "soc" else 0.0
@@ -275,17 +285,48 @@ def filter_setup(a, m, cs, cell, P, d):
     return types.SimpleNamespace(q0=q0, z_of=z_of, v=v, ek=ek, c0=c0, P0sd=P0sd, Qsd=Qsd, R=(a.sigma_mV * 1e-3) ** 2, win=win,
                                  scale=scale, Q_ref=d["meta"]["Q_ref"], z0=z_of(q0), rng_w=rng_w, P0=P0, cell=c,
                                  coords=coords, start=start, li_sigma=li_sigma, li_ref=li_ref, li_w=li_w, p0_q=p0_q,
-                                 dshift=P["dx_window_n"] * P["cmax_n"])
+                                 dshift=P["dx_window_n"] * P["cmax_n"], a=a)
 
 
 def ekf_soc(fs, d, err):
     """Python EKF on the record d from the start q0 + err [A.h]: per-step SOC (cathode read-out), its sd, the Coulomb-
     counting reference, and the filter's history H."""
     c = fs.cell
-    run = jax.jit(lambda x0_: fs.ek.run(x0_, jnp.asarray(fs.P0), jnp.asarray(fs.Qsd), fs.R, jnp.asarray(d["I"]),
-                                        jnp.asarray(d["V"])))
+    a = fs.a
+    t = np.asarray(d["t"])
+    upd = np.ones(len(t), bool)
+    if getattr(a, "y_every_s", 0):            # one voltage update per y_every_s (scripts/ekf_exp.py), all in the burn-in
+        upd = np.r_[True, np.diff(np.floor(t / a.y_every_s)) > 0]
+        if a.y_burn_s:
+            upd |= t <= a.y_burn_s
+    y = jnp.asarray(np.where(upd, d["V"], np.nan))
+    I = jnp.asarray(d["I"])
+    x0 = jnp.asarray(np.r_[fs.z_of(fs.q0 + err), fs.c0])
+    nz = fs.ek.nz
     t0 = time.time()
-    H = {k: np.asarray(vv) for k, vv in run(jnp.asarray(np.r_[fs.z_of(fs.q0 + err), fs.c0])).items()}
+    if getattr(a, "th_hold_s", 0):
+        # two time scales (scripts/ekf_exp.py --th-hold-s): coordinates held (1e-8 of the prior variance, no random walk;
+        # the bias too with --hold-vb), then released at --p0-th-release x the prior sd, cross-covariances zeroed
+        kh = int(np.searchsorted(t, a.th_hold_s))
+        P0 = np.array(fs.P0); Qd = np.array(fs.Qsd)
+        iv = None if ("Vb" not in fs.coords or a.hold_vb) else nz + fs.coords.index("Vb")
+        P1 = P0.copy(); P1[nz:, :] = 0.0; P1[:, nz:] = 0.0
+        P1[nz:, nz:] = np.diag(1e-8 * np.diag(P0)[nz:])
+        Q1 = Qd.copy(); Q1[nz:] = 0.0
+        if iv is not None:
+            P1[iv, iv] = P0[iv, iv]; Q1[iv] = Qd[iv]
+        H1 = jax.jit(lambda: fs.ek.run(x0, jnp.asarray(P1), jnp.asarray(Q1), fs.R, I[:kh], y[:kh]))()
+        P2 = np.array(H1["P_end"]); vb_keep = None if iv is None else (P2[iv, :].copy(), P2[:, iv].copy())
+        P2[nz:, :] = 0.0; P2[:, nz:] = 0.0
+        P2[nz:, nz:] = np.diag(np.diag(P0)[nz:] * a.p0_th_release ** 2)
+        if vb_keep is not None:
+            P2[iv, :nz] = vb_keep[0][:nz]; P2[:nz, iv] = vb_keep[1][:nz]; P2[iv, iv] = vb_keep[0][iv]
+        H2 = jax.jit(lambda: fs.ek.run(H1["x_end"], jnp.asarray(P2), jnp.asarray(Qd), fs.R, I[kh:], y[kh:]))()
+        H = {k: np.concatenate([np.asarray(H1[k]), np.asarray(H2[k])]) for k in H1 if k not in ("x_end", "P_end")}
+    else:
+        run = jax.jit(lambda x0_: fs.ek.run(x0_, jnp.asarray(fs.P0), jnp.asarray(fs.Qsd), fs.R, I, y))
+        H = {k: np.asarray(vv) for k, vv in run(x0).items() if k not in ("x_end", "P_end")}
+    H["upd"] = upd.astype(int)
     wall = time.time() - t0
     w = fs.win
     soc = (w["y_bot"] - H["ybar"]) / (w["y_bot"] - w["y_top"])           # SOC from the cathode stoichiometry
@@ -318,7 +359,17 @@ def main():
     ap.add_argument("--p0-th", type=float, default=0.3)
     ap.add_argument("--q-th", type=float, default=1e-4)
     ap.add_argument("--ekf-err", default="0.4", help="[soc] start errors [A.h] of the golden EKF runs")
-    ap.add_argument("--coords", default="Rf", help="filter coordinates: Rf, or Rf,LLI (ageing)")
+    ap.add_argument("--coords", default="Rf", help="filter coordinates: Rf, Rf,LLI (ageing), Rf,LLI,Vb (voltage bias)")
+    ap.add_argument("--p0-vb-mV", type=float, default=20.0, help="prior sd of the voltage bias [mV]")
+    ap.add_argument("--q-vb-mV", type=float, default=0.5, help="random walk of the voltage bias [mV per sqrt(s)]")
+    ap.add_argument("--q-shell", type=float, default=0.0, help="random walk on the particle means [of c_max per sqrt(s)]")
+    ap.add_argument("--th-hold-s", type=float, default=0.0, help="coordinates held for the first this many seconds")
+    ap.add_argument("--p0-th-release", type=float, default=1.0, help="prior sd at the release, x the prior")
+    ap.add_argument("--hold-vb", action="store_true", help="hold the voltage bias too")
+    ap.add_argument("--y-every-s", type=float, default=0.0, help="one voltage update per this many seconds (0: every step)")
+    ap.add_argument("--y-burn-s", type=float, default=0.0, help="with --y-every-s: every step for the first this many seconds")
+    ap.add_argument("--innov-clip-mV", type=float, default=None, help="limit on the innovation of the state update [mV]")
+    ap.add_argument("--li-sigma-Ah", type=float, default=None, help="sd of the lithium pseudo-measurement [A.h]")
     ap.add_argument("--start", default="soc", choices=("soc", "params"),
                     help="soc: CYC20 from wrong charges (lithium-conserving P0); params: --test from the identified values")
     ap.add_argument("--test", default="CYC20", help="record of the EKF golden run (and of q0, z0)")
@@ -332,8 +383,8 @@ def main():
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     a.coords = tuple(c_ for c_ in a.coords.split(",") if c_)
-    if "Rf" not in a.coords or set(a.coords) - {"Rf", "LLI"}:
-        sys.exit("--coords: Rf or Rf,LLI")
+    if a.coords[0] != "Rf" or set(a.coords) - {"Rf", "LLI", "Vb"}:
+        sys.exit("--coords: Rf first, then LLI and / or Vb")
     a.dims = tuple(int(v) for v in a.dims.split(","))
     dts = [float(v) for v in a.dt.split(",")]
     if a.ekf_dt not in dts:
@@ -477,6 +528,18 @@ def main():
     h.arr("li_w", fs.li_w, "lithium = li_w . z [mol/m2]")
     h.real("li_ref", fs.li_ref, "lithium of the beginning-of-life window [mol/m2]")
     h.real("li_sigma", fs.li_sigma or 0.0, "relative sd of the lithium pseudo-measurement (0: off)")
+    h.raw("// voltage bias and two time scales (scripts/ekf_exp.py --coords ...,Vb --th-hold-s --y-every-s)")
+    h.raw("#define DFN_MODEL_VB 1")
+    h.int_("ITH_VB", fs.coords.index("Vb") if "Vb" in fs.coords else -1, "voltage bias coordinate (-1: none)")
+    iqz = [i for i in range(nz) if Qsd[i] > 0]
+    h.int_("NQZ", len(iqz), "state entries with process noise")
+    h.raw("static const int IQZ[%d] = {%s};" % (max(1, len(iqz)), ", ".join(str(i) for i in iqz) or "0"))
+    h.real("innov_clip", (a.innov_clip_mV or 0.0) * 1e-3, "[V] limit on the innovation of the state update (0: off)")
+    h.real("hold_s", a.th_hold_s, "[s] coordinates held for this long from the start (0: never)")
+    h.real("p0_release", a.p0_th_release, "prior sd at the release, x the prior")
+    h.int_("hold_vb", int(a.hold_vb), "the voltage bias is held too")
+    h.real("y_every_s", a.y_every_s, "[s] one voltage update per this interval (0: every step)")
+    h.real("y_burn_s", a.y_burn_s, "[s] with y_every_s: every step for this long from the start")
     h.raw("}  // namespace dfn_model")
     with open(os.path.join(out, "model.h"), "w", encoding="utf-8") as f:
         f.write("\n".join(h.lines) + "\n")
@@ -566,7 +629,9 @@ def main():
             Hk["vals"][-1, 0]))
         write_csv(os.path.join(gdir, "ekf_CYC20_e%+.2f.csv" % e),
                   dict(t=d_cyc["t"], I=d_cyc["I"], y=d_cyc["V"], V=Hk["V"], innov=Hk["innov"], Sy=Hk["Sy"], soc=soc,
-                       sd_soc=sd_soc, soc_ref=soc_ref, Rf=Hk["vals"][:, 0], sd_Rf=Hk["sd_vals"][:, 0], res=Hk["resF"]))
+                       sd_soc=sd_soc, soc_ref=soc_ref, Rf=Hk["vals"][:, 0], sd_Rf=Hk["sd_vals"][:, 0], res=Hk["resF"],
+                       upd=Hk["upd"], ldp=Hk["ppl"], **{k_: Hk["vals"][:, i] for i, k_ in enumerate(fs.coords) if k_ != "Rf"},
+                       **{"sd_" + k_: Hk["sd_vals"][:, i] for i, k_ in enumerate(fs.coords) if k_ != "Rf"}))
 
 
 if __name__ == "__main__":

@@ -92,6 +92,34 @@ class EKF:
         E1, G1 = (self.E1, self.G1) if self._em_cur is None else self._em_cur
         return E1, G1.at[:, :self.m.Nn].multiply(th[1])
 
+    def set_temperature_law(self, law):
+        """Cell temperature as a known per-step input (run(..., T_cell=)): law = dict(T_ref [K], Ea_Dn, Ea_Dp, Ea_r, Ea_s
+        [J/mol], kappa_T=(T_K, kappa), De_T=(T_K, De) tables, dUdT0, dUdT_n, dUdT_p). The model was built at m.P["T"] (T0);
+        each step scales from it, as lpmodel's lumped thermal state: D_s,n, D_s,p, k0 (Arrhenius), R_contact, kappa (closure
+        A_e, Kd), D_e (electrolyte step maps, expm at the step), chi and the Butler-Volmer T, the entropic term."""
+        m, A_ = self.m, self.m.A
+        self._tlaw = dict(law)
+        self._tref = dict(P={k: m.P[k] for k in ("Ds_n", "Ds_p", "k0_n", "k0_p", "R_contact", "kappa", "De", "T", "entropic")},
+                          A_T=A_.T, chi=A_.chi, j_Kd=A_.j_Kd, j_A_e=A_.j_A_e, jMdiff=m.jMdiff)
+
+    def _apply_T(self, Tk):
+        """Set the model to the cell temperature Tk [K] (a tracer inside the scan step); _restore_T undoes it."""
+        m, A_, L, r = self.m, self.m.A, self._tlaw, self._tref
+        P0 = r["P"]; T0 = P0["T"]; R = 8.314462618
+        ark = (1.0 / Tk - 1.0 / T0) / R
+        rk = jnp.interp(Tk, jnp.asarray(L["kappa_T"][0]), jnp.asarray(L["kappa_T"][1])) / P0["kappa"]
+        rD = jnp.interp(Tk, jnp.asarray(L["De_T"][0]), jnp.asarray(L["De_T"][1])) / P0["De"]
+        m.P.update(Ds_n=P0["Ds_n"] * jnp.exp(-L["Ea_Dn"] * ark), Ds_p=P0["Ds_p"] * jnp.exp(-L["Ea_Dp"] * ark),
+                   k0_n=P0["k0_n"] * jnp.exp(-L["Ea_r"] * ark), k0_p=P0["k0_p"] * jnp.exp(-L["Ea_r"] * ark),
+                   R_contact=P0["R_contact"] * jnp.exp(L["Ea_s"] * ark), kappa=P0["kappa"] * rk, De=P0["De"] * rD, T=Tk,
+                   entropic=(Tk - L["T_ref"], L["dUdT0"], L["dUdT_n"], L.get("dUdT_p", 0.0)))
+        A_.T = Tk; A_.chi = r["chi"] * Tk / T0; A_.j_Kd = r["j_Kd"] * rk; A_.j_A_e = r["j_A_e"] * rk
+        m.jMdiff = r["jMdiff"] * rD
+
+    def _restore_T(self):
+        m, A_, r = self.m, self.m.A, self._tref
+        m.P.update(r["P"]); A_.T = r["A_T"]; A_.chi = r["chi"]; A_.j_Kd = r["j_Kd"]; A_.j_A_e = r["j_A_e"]; m.jMdiff = r["jMdiff"]
+
     def dt_table(self, dt_set):
         """Electrolyte step maps (E, G) at theta = 1 for each step length of dt_set [s], stacked [k, ...]."""
         EG = [self.m.elec_mats(jnp.array([1.0, 1.0, 1.0]), float(d)) for d in dt_set]
@@ -183,7 +211,7 @@ class EKF:
         Vt = jnp.concatenate([Cj, Esel, Lsel], 0)
         return U, Vt
 
-    def make_step(self, x0, P0_diag, Q_diag, R, nees=False, scale=None, temp=False, table=None):
+    def make_step(self, x0, P0_diag, Q_diag, R, nees=False, scale=None, temp=False, table=None, tcell=False):
         """temp: the scan inputs carry the factor tf on theta[2] (f_and_lin) after (I, y).
         table: (E [k, N, N], G [k, N, n]) of dt_table; the inputs then also carry the step length dt_k [s] and its row k
         (after tf); the particle constants use dt_k, the electrolyte the row, and the process noise Q_diag (a random walk,
@@ -213,17 +241,26 @@ class EKF:
         dt0 = m.dt
         i_tf = 2 if temp else None
         i_dt = 2 + int(temp)
-        i_true = 2 + int(temp) + 2 * int(table is not None)
+        i_T = i_dt + 2 * int(table is not None)
+        i_true = i_T + int(tcell)
 
         def step(carry, inp):
-            if table is None:
+            if table is None and not tcell:
                 return step_(carry, inp, Q0)
-            dtk, kk = inp[i_dt], inp[i_dt + 1]
-            m.dt = dtk; self._em_cur = (table[0][kk], table[1][kk])        # traced once: every m.* default uses dt_k
+            Qs = Q0
+            if table is not None:
+                dtk, kk = inp[i_dt], inp[i_dt + 1]
+                m.dt = dtk; self._em_cur = (table[0][kk], table[1][kk])    # traced once: every m.* default uses dt_k
+                Qs = Q0 * (dtk / dt0)                                       # random walks: variance ~ dt
+            if tcell:                                                       # cell temperature input: model at T_k
+                self._apply_T(inp[i_T])
+                self._em_cur = m.elec_mats(jnp.array([1.0, 1.0, 1.0]))      # electrolyte maps at D_e(T_k), dt_k (expm)
             try:
-                return step_(carry, inp, Q0 * (dtk / dt0))                  # random walks: variance ~ dt
+                return step_(carry, inp, Qs)
             finally:
                 m.dt = dt0; self._em_cur = None
+                if tcell:
+                    self._restore_T()
 
         def step_(carry, inp, Q0):
             u, P, g_prev = carry
@@ -237,6 +274,8 @@ class EKF:
             Ph = P @ hs; Sy = hs @ Ph + R; K = Ph / Sy
             innov = yk - L["V"]
             ok_y = jnp.isfinite(yk)                                                          # y = NaN: no voltage update (masked sample)
+            if getattr(self, "res_skip", None) is not None:                                  # closure not converged: its V is
+                ok_y = ok_y & (L["res"] <= self.res_skip)                                    # wrong, prediction only at that step
             innov_u = innov if self.innov_clip is None else jnp.clip(innov, -self.innov_clip, self.innov_clip)   # large first corrections in steps
             K = jnp.where(ok_y, K, 0.0); du = K * jnp.where(ok_y, innov_u, 0.0)
             M_ = P - jnp.outer(K, Ph)
@@ -289,7 +328,7 @@ class EKF:
         imp = m.imp_coeffs(z0, th, None, self.em_of(th))
         return m.A.newton(m.A.guess(csn, csp, I0, th), csn, csp, ce, I0, th, tol=1e-10, imp=imp)[0]
 
-    def run(self, x0, P0d, Qd, R, Iseq, y, x_true=None, tfac=None, dts=None, dt_set=None):
+    def run(self, x0, P0d, Qd, R, Iseq, y, x_true=None, tfac=None, dts=None, dt_set=None, T_cell=None):
         """tfac: optional per-step factor on theta[2] (see f_and_lin), same length as Iseq.
         dts: optional per-step lengths [s] (variable step; each must be in dt_set, default the integers 1..max(dts)).
         y: measured voltage; NaN entries are masked samples (prediction only; the lithium pseudo-measurement still applies).
@@ -302,13 +341,17 @@ class EKF:
             dt_set = tuple(float(v) for v in (dt_set if dt_set is not None else range(1, int(round(dts_np.max())) + 1)))
             idx = np.array([dt_set.index(float(v)) for v in dts_np])
             table = self.dt_table(dt_set)
-        step, scale = self.make_step(x0, np.ones(self.n) if full else P0d, Qd, R, nees=x_true is not None, temp=temp, table=table)
+        tcell = T_cell is not None
+        if tcell and not hasattr(self, "_tlaw"):
+            raise ValueError("T_cell needs set_temperature_law() first")
+        step, scale = self.make_step(x0, np.ones(self.n) if full else P0d, Qd, R, nees=x_true is not None, temp=temp, table=table,
+                                     tcell=tcell)
         x0 = jnp.asarray(x0); Iseq = jnp.asarray(Iseq)
         th0 = self.th_of(x0[self.nz:])
         if temp:
             th0 = th0.at[2].multiply(jnp.asarray(tfac)[0])
         g0 = self.init_g(x0[:self.nz], Iseq[0], th0, x0[self.nz:])
-        inp = (Iseq, jnp.asarray(y)) + ((jnp.asarray(tfac),) if temp else ())             + ((jnp.asarray(dts_np), jnp.asarray(idx)) if table is not None else ())             + (() if x_true is None else ((jnp.asarray(x_true) - x0) / scale,))
+        inp = (Iseq, jnp.asarray(y)) + ((jnp.asarray(tfac),) if temp else ())             + ((jnp.asarray(dts_np), jnp.asarray(idx)) if table is not None else ())             + ((jnp.asarray(T_cell),) if tcell else ())             + (() if x_true is None else ((jnp.asarray(x_true) - x0) / scale,))
         n = self.n
         P0 = jnp.asarray(P0d) / jnp.outer(scale, scale) if full else jnp.diag((jnp.asarray(P0d) / scale) ** 2)
         (uT, PT, gT), H = jax.lax.scan(step, (jnp.zeros(n), P0, g0), inp)

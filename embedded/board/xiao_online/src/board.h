@@ -11,9 +11,8 @@
 #define BOARD_NAME "XIAO ESP32-S3"
 static const int PIN_INA_SDA = D4, PIN_INA_SCL = D5;
 static const int PIN_OLED_SDA = D9, PIN_OLED_SCL = D8;
-#define HAVE_DHT 1
-#define TEMP_NTC 0
-static const int PIN_DHT = D10;
+static const int PIN_NTC = A1;                               // temperature (main.cpp finds which is there):
+static const int PIN_DHT = D10;                              //   KY-013 NTC on D1 (A1, ADC1) or DHT22 on D10
 static portMUX_TYPE board_mux = portMUX_INITIALIZER_UNLOCKED;
 #define BOARD_LOCK() portENTER_CRITICAL(&board_mux)
 #define BOARD_UNLOCK() portEXIT_CRITICAL(&board_mux)
@@ -39,10 +38,8 @@ static void board_start_sampler(uint32_t period_ms, void (*cb)()) {
 #define BOARD_NAME "XIAO nRF52840"
 static const int PIN_INA_SDA = D5, PIN_INA_SCL = D4;
 static const int PIN_OLED_SDA = D9, PIN_OLED_SCL = D8;
-#define HAVE_DHT 1                                           // a temperature sensor:
-#define TEMP_NTC 1                                           //   the KY-013 analog NTC module, S on D1 (A1)
-static const int PIN_NTC = A1;
-static const int PIN_DHT = D10;                              //   (a DHT22 instead: TEMP_NTC 0, data on D10)
+static const int PIN_NTC = A1;                               // temperature (main.cpp finds which is there):
+static const int PIN_DHT = D10;                              //   KY-013 NTC on D1 (A1) or DHT22 on D10
 #define BOARD_LOCK() taskENTER_CRITICAL()
 #define BOARD_UNLOCK() taskEXIT_CRITICAL()
 

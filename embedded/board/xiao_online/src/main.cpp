@@ -2,12 +2,15 @@
 // DFN + EKF of embedded/include/dfn (model from platformio.ini), an SSD1306 OLED on Wire1, the DHT22 on the ESP32-S3
 // board, and the CSV telemetry on USB serial and Bluetooth LE (Nordic UART, nus.h).
 //
+// Telemetry rows at TX_HZ (default 1 Hz; command "rate N", N = 1, 2, 5 or 10), independent of the EKF step: V, I, I_inst,
+// the temperatures, Q_Ah and samples are measured over the row's own interval; the EKF columns repeat the last step,
+// and flags bit 1 marks the first row after a new EKF step.
 // Telemetry: the column names of the Battage firmware where the meaning is the same, so the Battage dashboard
 // (BattageDiagnosticSystem/Embedded/dashboard/index.html) shows it unchanged: it reads the header line
 // "# t_s,V,..." and takes the columns by name ("–" for the ones not sent). Discharge is positive.
 //   t_s        time since start [s]
-//   V          measured voltage: mean of the last second of the step [V]
-//   I          step mean of the integrated current [A] (+ I_SELF_A, the board's own unmeasured draw, if set)
+//   V          measured voltage: mean over the row's interval [V]
+//   I          mean of the integrated current over the row's interval [A] (+ I_SELF_A, the board's unmeasured draw)
 //   I_inst     latest shunt reading [A]
 //   T_cell_C, T_amb_C   DHT22 air temperature [degC] (nan without it)
 //   T_model_C  the temperature the model runs at: the measured one when valid (dfn::TH.set: Arrhenius kinetics,
@@ -15,11 +18,19 @@
 //              (at start: the header's, 20 degC)
 //   SoC, SoC_sig        EKF SOC and its 1 sigma
 //   SoH, SoH_sig        nan (not estimated by this model)
-//   V_est, innov        model voltage and innovation V - V_est [V]
+//   V_est, innov        model voltage and innovation at the last EKF step [V] (the step's V = V_est + innov)
 //   Q_Ah       charge counted since the start [A.h]
-//   flags      bit 0 EKF update, 3 V < 3.3 V, 4 V < 3.0 V, 6 no NTC, 7 DHT22 invalid, 8 charging
+//   flags      bit 0 EKF update, bit 1 new EKF step in this row, 3 V < 3.3 V, 4 V < 3.0 V, 6 no NTC, 7 DHT22 invalid, 8 charging
 //   Rf, Rf_sig, LLI     film resistance factor and the LLI coordinate (0 when the model does not estimate it)
-//   res, nit, step_ms, samples   closure residual, Newton iterations, EKF step time, sampler readings in the step
+//   res, nit, step_ms   closure residual, Newton iterations, EKF step time (last step)
+//   samples    sampler readings in the row
+//   Vb, Vb_sig          voltage bias [V] (V = V_model + Vb; 0 when the model does not estimate it), its 1 sigma
+//   LDP        lithium deposition potential at the anode/separator interface, last EKF step [V] (< 0: plating
+//              favoured; phi_s - phi_e - Rf j extrapolated to the separator, from the predicted state)
+//   held                1 while the parameters are held (the first hold_s of the header, two time scales)
+// Filter schedule (header, scripts/ekf_exp.py): a voltage update at every step for the first y_burn_s, then one per
+// y_every_s (the model error is correlated over minutes); Rf, LLI (and Vb with hold_vb) held for the first hold_s, then
+// released (EKF::release).
 //
 // Measurement: the INA228 converts shunt and bus continuously (1052 us each, 64x average: new values every 0.135 s).
 // The sampler (board.h: above the EKF's priority, so the ~0.6 s step does not stop it) reads both every SAMPLE_MS and
@@ -41,9 +52,7 @@
 #include <esp_attr.h>
 #include <esp_system.h>
 #endif
-#if HAVE_DHT
 #include <DHT.h>
-#endif
 
 #ifndef STEP_S
 #define STEP_S 5
@@ -63,7 +72,7 @@ static const double CURRENT_LSB = 10.0 / 524288.0;           // A per LSB (10 A 
 static const uint8_t INA = 0x40;
 static const char HEADER[] =
     "# t_s,V,I,I_inst,T_cell_C,T_amb_C,SoC,SoC_sig,SoH,SoH_sig,V_est,innov,Q_Ah,flags,Rf,Rf_sig,LLI,res,nit,step_ms,"
-    "samples,T_model_C";
+    "samples,T_model_C,Vb,Vb_sig,held,LDP";
 
 // ------------------------------------------------------------------ INA228
 static void ina_w16(uint8_t reg, uint16_t v) {
@@ -77,6 +86,7 @@ static bool ina_read(uint8_t reg, uint8_t* b, int n) {
     return true;
 }
 static bool ina_ok = false;
+static volatile bool sampler_paused = false;                 // the bus is being scanned ("pins"): no readings
 static bool ina_init() {
     uint8_t b[2];
     if (!ina_read(0x3F, b, 2) || ((b[0] << 4) | (b[1] >> 4)) != 0x228) return false;
@@ -102,7 +112,9 @@ static float ina_vbus() {
 }
 
 // ------------------------------------------------------------------ sampler
-static volatile double acc_q = 0;                            // integrated charge [C] (> 0 discharge)
+static volatile double acc_q = 0;                            // integrated charge [C] (> 0 discharge), EKF step
+static volatile double row_q = 0, row_sv = 0;                // the same for the telemetry row, and its voltage sum
+static volatile int row_nv = 0, row_n = 0;
 static volatile int step_n = 0;
 static volatile float last_i = 0;
 static float vring[1000 / SAMPLE_MS];                        // bus voltages of the last second
@@ -113,21 +125,31 @@ static int iring_i = 0, iring_n = 0;
 static uint32_t last_us = 0;
 
 static void sample_cb() {
+    if (sampler_paused || !ina_ok) return;                   // no INA228: no bus traffic (and no error log per read)
     float i = ina_ishunt(), v = ina_vbus();
     uint32_t now = micros();
     double dt = (now - last_us) * 1e-6;
     last_us = now;
     BOARD_LOCK();
     if (i == i) {
-        acc_q += (double)i * dt; last_i = i;
+        acc_q += (double)i * dt; row_q += (double)i * dt; last_i = i;
         iring[iring_i] = i; iring_i = (iring_i + 1) % VR_N;
         if (iring_n < VR_N) ++iring_n;
     }
     if (v == v) {
+        row_sv += v; ++row_nv;
         vring[vring_i] = v; vring_i = (vring_i + 1) % VR_N;
         if (vring_n < VR_N) ++vring_n;
     }
-    ++step_n;
+    ++step_n; ++row_n;
+    BOARD_UNLOCK();
+}
+// the charge integrated since the last row [C], the row's mean voltage and its readings
+static void take_row(double* q, float* v, int* n) {
+    BOARD_LOCK();
+    *q = row_q; row_q = 0;
+    *v = row_nv ? (float)(row_sv / row_nv) : NAN; row_sv = 0; row_nv = 0;
+    *n = row_n; row_n = 0;
     BOARD_UNLOCK();
 }
 // the charge integrated since the last call [C], the mean voltage of the last second, and the readings in between
@@ -256,48 +278,109 @@ static void firmware_line() {                               // the dashboard che
 #endif
 }
 
-// ------------------------------------------------------------------ temperature (DHT22, ESP32-S3 board)
-static float t_amb = NAN;
-#if HAVE_DHT && TEMP_NTC
-// KY-013 analog module: 10 k NTC (B 3950) and a 10 k resistor between 3V3 and GND, the midpoint on S. Read
-// ratiometrically (reference VDD/4 at gain 1/4: full scale = VDD), so the supply cancels. NTC_ON_TOP: the NTC between
-// 3V3 and S (S rises with the temperature) instead of between S and GND.
+// ------------------------------------------------------------------ temperature: DHT22 on D10 or KY-013 NTC on D1
+// One firmware for both boards: the sensor is found at run time (temp_detect), and looked for again every 10 s while
+// none answers or after 30 s without a valid reading (a sensor plugged in or out while running).
+//   DHT22 (Battage board): its module pulls the data line up (10 k), so D10 reads high against the input's internal
+//     pull-down; bare, it reads low. Then confirmed by its first valid reading.
+//   KY-013: 10 k NTC (B 3950) and 10 k between 3V3 and GND, the midpoint on S (D1 = A1). With the internal pull-down,
+//     a bare pin reads ~0 and the divider ~0.45 of the supply; then the reading must be steady and inside (0.05, 0.95).
+//     Read ratiometrically on the nRF52840 (reference VDD/4 at gain 1/4); on the ESP32-S3, whose ADC has no VDD
+//     reference, in calibrated millivolts over a nominal 3.3 V (a 1 % supply error is ~0.25 degC at 25 degC).
+//     NTC_ON_TOP: the NTC between 3V3 and S instead of between S and GND.
+#if defined(ARDUINO_ARCH_ESP32)
+#include <driver/gpio.h>
+#endif
 #ifndef NTC_ON_TOP
 #define NTC_ON_TOP 0
 #endif
+static float t_amb = NAN;
 static float ntc_ratio = NAN;                                // last S / VDD (sensors-only output)
-struct NtcSensor {
-    void begin() { analogReference(AR_VDD4); analogReadResolution(12); }
-    float readTemperature() {
-        uint32_t s = 0;
-        for (int k = 0; k < 16; ++k) s += analogRead(PIN_NTC);
-        const float r = s / (16.0f * 4095.0f);
-        ntc_ratio = r;
-        if (r < 0.02f || r > 0.98f) return NAN;                // open or shorted
-        const float R = NTC_ON_TOP ? 10000.0f * (1 - r) / r : 10000.0f * r / (1 - r);
-        return 1.0f / (1.0f / 298.15f + logf(R / 10000.0f) / 3950.0f) - 273.15f;
-    }
-};
-static NtcSensor dht;
-#elif HAVE_DHT
-static DHT dht(PIN_DHT, DHT22);
+enum TempKind { TEMP_NONE, TEMP_KY013, TEMP_DHT22 };
+static TempKind t_kind = TEMP_NONE;
+static const char* temp_name() { return t_kind == TEMP_KY013 ? "NTC KY-013" : t_kind == TEMP_DHT22 ? "DHT22" : "no sensor"; }
+static DHT dht22(PIN_DHT, DHT22);
+static float ntc_ratio_read() {
+    uint32_t s = 0;
+#if defined(ARDUINO_ARCH_ESP32)
+    for (int k = 0; k < 16; ++k) s += analogReadMilliVolts(PIN_NTC);
+    return s / (16.0f * 3300.0f);
+#else
+    for (int k = 0; k < 16; ++k) s += analogRead(PIN_NTC);
+    return s / (16.0f * 4095.0f);
 #endif
-#if HAVE_DHT
-static unsigned long dht_last = 0, dht_ok_ms = 0;
-static void dht_poll() {
-    unsigned long now = millis();
-    if (now - dht_last < (TEMP_NTC ? 1000UL : 5000UL)) return;
-    dht_last = now;
-    float t = dht.readTemperature();
-    if (t == t) { t_amb = t; dht_ok_ms = now; }
-    else if (now - dht_ok_ms > 30000) t_amb = NAN;            // no valid reading for 30 s
 }
+static float ntc_temperature() {
+    const float r = ntc_ratio_read();
+    ntc_ratio = r;
+    if (r < 0.02f || r > 0.98f) return NAN;                  // open or shorted
+    const float R = NTC_ON_TOP ? 10000.0f * (1 - r) / r : 10000.0f * r / (1 - r);
+    return 1.0f / (1.0f / 298.15f + logf(R / 10000.0f) / 3950.0f) - 273.15f;
+}
+static bool dht_line_pulled_up() {
+    pinMode(PIN_DHT, INPUT_PULLDOWN);
+    delay(2);
+    int hi = 0;
+    for (int k = 0; k < 8; ++k) { hi += digitalRead(PIN_DHT); delayMicroseconds(200); }
+    pinMode(PIN_DHT, INPUT);
+    return hi >= 7;
+}
+static bool ntc_present() {
+#if defined(ARDUINO_ARCH_ESP32)
+    analogReadResolution(12); analogSetPinAttenuation(PIN_NTC, ADC_11db);
+    (void)analogReadMilliVolts(PIN_NTC);                     // attaches the pin to the ADC, then the pull-down on top
+    gpio_pulldown_en((gpio_num_t)digitalPinToGPIONumber(PIN_NTC)); gpio_pullup_dis((gpio_num_t)digitalPinToGPIONumber(PIN_NTC));
+#else
+    analogReference(AR_VDD4); analogReadResolution(12);
 #endif
+    delay(2);
+    float lo = 1, hi = 0;
+    for (int k = 0; k < 4; ++k) { float r = ntc_ratio_read(); if (r < lo) lo = r; if (r > hi) hi = r; }
+#if defined(ARDUINO_ARCH_ESP32)
+    gpio_pulldown_dis((gpio_num_t)digitalPinToGPIONumber(PIN_NTC));
+#endif
+    return lo > 0.05f && hi < 0.95f && hi - lo < 0.03f;
+}
+static unsigned long t_last = 0, t_ok_ms = 0, t_detect_ms = 0;
+static void temp_detect() {
+    t_detect_ms = millis();
+    TempKind k = TEMP_NONE;
+    if (dht_line_pulled_up()) { dht22.begin(); k = TEMP_DHT22; }
+    else if (ntc_present()) k = TEMP_KY013;
+    if (k != t_kind) {
+        t_kind = k; t_ok_ms = millis();
+        char b[64];
+        snprintf(b, sizeof(b), "# temperature sensor: %s", temp_name());
+        out(b);
+    }
+}
+static float temp_read() {
+    return t_kind == TEMP_KY013 ? ntc_temperature() : t_kind == TEMP_DHT22 ? dht22.readTemperature() : NAN;
+}
+static void temp_poll() {
+    unsigned long now = millis();
+    if (t_kind == TEMP_NONE) {
+        if (now - t_detect_ms >= 10000UL) temp_detect();
+        return;
+    }
+    if (now - t_last < (t_kind == TEMP_KY013 ? 1000UL : 5000UL)) return;
+    t_last = now;
+    float t = temp_read();
+    if (t == t) { t_amb = t; t_ok_ms = now; }
+    else if (now - t_ok_ms > 30000) { t_amb = NAN; t_kind = TEMP_NONE; t_detect_ms = 0; }   // gone: look again
+}
 
 // ------------------------------------------------------------------ estimation
 static dfn::EKF ekf;
 static double Ah_counted = 0;
+static double t_ekf = 0;                                     // EKF time since the start [s]: hold and update schedule
+static long y_slot = -1;                                     // last y_every_s interval with a voltage update
 static unsigned long t_prev, t_start, last_ms = 0;
+#ifndef TX_HZ
+#define TX_HZ 1
+#endif
+static int tx_hz = TX_HZ;                                    // telemetry rows per second (command "rate N")
+static unsigned long t_row = 0;
 static bool ready = false;
 // plausible cell voltage: outside it (no cell on the INA's VBUS, a loose wire) the EKF is not corrected, and it is
 // not started until a voltage inside it arrives
@@ -338,9 +421,9 @@ static const char* reset_reason() {
         default: return "other";
     }
 }
-struct Kept { uint32_t magic; double q, c0, Ah; uint32_t check; };
+struct Kept { uint32_t magic; double q, c[dfn_model::NTH], Ah, t_ekf; uint32_t check; };
 RTC_NOINIT_ATTR static Kept kept;
-static const uint32_t KEPT_MAGIC = 0xDF0E5A1Cu;
+static const uint32_t KEPT_MAGIC = 0xDF0E5A1Du;              // changed with the layout (coordinates, EKF time)
 static uint32_t kept_check(const Kept& k) {
     const uint8_t* b = (const uint8_t*)&k;
     uint32_t h = 2166136261u;
@@ -351,13 +434,15 @@ static void keep_state(const dfn::EkfOut& o) {
     kept.magic = KEPT_MAGIC;
     kept.q = ((double)dfn::ybar(ekf.x) - (double)dfn_model::y100) * (double)dfn_model::Q_p;   // charge below the top
     (void)o;
-    kept.c0 = log((double)o.Rf);
+    for (int k = 0; k < dfn_model::NTH; ++k) kept.c[k] = (double)ekf.x[dfn::NZ + k];   // the coordinates (Rf log, LLI, Vb)
     kept.Ah = Ah_counted;
+    kept.t_ekf = t_ekf;
     kept.check = kept_check(kept);
 }
 static bool kept_valid() {
-    return esp_reset_reason() != ESP_RST_POWERON && kept.magic == KEPT_MAGIC && kept.check == kept_check(kept)
-        && kept.q == kept.q && kept.c0 == kept.c0;
+    bool fin = kept.q == kept.q;
+    for (int k = 0; k < dfn_model::NTH; ++k) fin = fin && kept.c[k] == kept.c[k];
+    return esp_reset_reason() != ESP_RST_POWERON && kept.magic == KEPT_MAGIC && kept.check == kept_check(kept) && fin;
 }
 #else
 static const char* reset_reason() { return board_reset_reason(); }
@@ -366,10 +451,15 @@ static bool kept_valid() { return false; }
 #endif
 static bool resumed_once = false;
 
-static void init_at(double q, double c0) {
-    real_t z0[dfn::NZ];
+// start at q [A.h below the top]; c: all NTH coordinates (nullptr: the header's), t0: the EKF time to resume at (the
+// parameters are released at once when it is past the hold)
+static void init_at(double q, const double* c, double t0) {
+    real_t z0[dfn::NZ], cs[dfn_model::NTH];
     for (int i = 0; i < dfn::NZ; ++i) z0[i] = (real_t)((double)dfn_model::z0[i] + (q - (double)dfn_model::q0) * (double)dfn_model::dz_dq[i]);
-    ekf.init(z0, (real_t)c0, dfn_model::EKF_IDT, 0);
+    for (int k = 0; k < dfn_model::NTH; ++k) cs[k] = c ? (real_t)c[k] : dfn::EKF::C0_of(k);
+    ekf.init(z0, cs[0], dfn_model::EKF_IDT, 0, cs);
+    t_ekf = t0; y_slot = -1;
+    if (t_ekf >= (double)dfn_model::hold_s) ekf.release();
     ready = true;
 }
 
@@ -377,7 +467,7 @@ static void start_from_ocv(float V) {
     crumb(5);
     double q = q_from_ocv(V);
     crumb(6);
-    init_at(q, 0);
+    init_at(q, nullptr, 0);
     crumb(7);
     board_wdt_feed();
     char b[120], *p = b;
@@ -395,24 +485,25 @@ static void restart(bool allow_resume) {
 #if defined(ARDUINO_ARCH_ESP32)
     if (allow_resume && !resumed_once && kept_valid()) {
         resumed_once = true;
-        init_at(kept.q, kept.c0);
+        init_at(kept.q, kept.c, kept.t_ekf);
         Ah_counted = kept.Ah;
         take(&q_, &v_, &n_);
         t_prev = millis();
+        { double rq; float rv; int rn; take_row(&rq, &rv, &rn); t_row = t_prev; }   // rows start with the EKF
         char b[120], *p = b;
         p += sprintf(p, "# resumed after the %s reset: SoC ", reset_reason());
         p = fmt(p, dfn::soc_of_ybar((real_t)((double)dfn_model::y100 + kept.q / (double)dfn_model::Q_p)) * 100.0, 2);
         p += sprintf(p, " %%, Rf ");
-        p = fmt(p, exp(kept.c0), 3);
+        p = fmt(p, exp(kept.c[0]), 3);
+        p += sprintf(p, ", at EKF time ");
+        p = fmt(p, kept.t_ekf, 0); p += sprintf(p, " s");
         out(b);
         return;
     }
 #endif
     resumed_once = true;
     crumb(2);
-#if HAVE_DHT
-    if (!(t_amb == t_amb)) { float t = dht.readTemperature(); if (t == t) t_amb = t; }   // the OCV at the cell's temperature
-#endif
+    if (!(t_amb == t_amb)) { float t = temp_read(); if (t == t) t_amb = t; }   // the OCV at the cell's temperature
     crumb(3);
     if (t_amb == t_amb) dfn::TH.set((real_t)t_amb);
     crumb(4);
@@ -420,26 +511,53 @@ static void restart(bool allow_resume) {
     crumb(10);
     take(&q_, &v_, &n_);
     t_prev = millis();
+    { double rq; float rv; int rn; take_row(&rq, &rv, &rn); t_row = t_prev; }   // rows start with the EKF
     Ah_counted = 0;
 }
 
+// "# dfn noise: q x1, r x1 (sigma 30.0 mV)": the dashboard's DFN noise panel reads it
+static void noise_line() {
+    char b[96], *p = b;
+    p += sprintf(p, "# dfn noise: q x"); p = fmt(p, ekf.q_mult, 2);
+    p += sprintf(p, ", r x"); p = fmt(p, ekf.r_mult, 2);
+    p += sprintf(p, " (sigma "); p = fmt(p, 1e3 * sqrt((double)dfn_model::R_meas) * ekf.r_mult, 1); sprintf(p, " mV)");
+    out(b);
+}
+static void pins_report();
 static void status() {
     char b[260];
     snprintf(b, sizeof(b), "# status: %s, model %s, step %d s, INA228 %s, OLED %s, BLE %s, %s %s, last EKF step %lu ms, "
-             "up %lu s, last reset: %s",
+             "up %lu s, telemetry %d Hz, last reset: %s",
              BOARD_NAME, dfn_model::TAG, STEP_S, ina_ok ? "ok" : "missing", oled_addr ? "ok" : "missing",
-             nus::connected() ? "connected" : "advertising", TEMP_NTC ? "NTC" : "DHT22", HAVE_DHT ? (t_amb == t_amb ? "ok" : "no reading") : "none",
-             last_ms, millis() / 1000UL, reset_reason());
+             nus::connected() ? "connected" : "advertising", temp_name(), t_kind == TEMP_NONE ? "-" : (t_amb == t_amb ? "ok" : "no reading"),
+             last_ms, millis() / 1000UL, tx_hz, reset_reason());
     out(b);
 }
 
 static void command(const char* c) {
     while (*c == ' ') ++c;
     if (!*c) return;
-    if (!strcmp(c, "header")) { out(HEADER); status(); }      // the dashboard asks for it on connecting
-    else if (!strcmp(c, "status")) { firmware_line(); status(); }
+    if (!strcmp(c, "header")) { out(HEADER); status(); noise_line(); }      // the dashboard asks for it on connecting
+    else if (!strcmp(c, "status")) { firmware_line(); status(); noise_line(); }
     else if (!strcmp(c, "reset") || !strcmp(c, "r")) restart(false);
-    else if (!strcmp(c, "help")) out("# commands: header, status, reset (re-initialize from the OCV now), help");
+    else if (!strncmp(c, "noise", 5)) {                      // noise [q N] [r N]: factors on the noise sd
+        const char* q = strstr(c, " q "); const char* r = strstr(c, " r ");
+        float qm = ekf.q_mult, rm = ekf.r_mult;
+        if (q) qm = atof(q + 3);
+        if (r) rm = atof(r + 3);
+        if (qm >= 0.1f && qm <= 100.0f && rm >= 0.1f && rm <= 100.0f) ekf.set_noise(qm, rm);
+        else out("# noise: factors between 0.1 and 100");
+        noise_line();
+    }
+    else if (!strcmp(c, "pins")) pins_report();
+    else if (!strncmp(c, "rate", 4)) {
+        int hz = atoi(c + 4);
+        char b[64];
+        if (hz == 1 || hz == 2 || hz == 5 || hz == 10) { tx_hz = hz; snprintf(b, sizeof(b), "# telemetry at %d Hz", hz); }
+        else snprintf(b, sizeof(b), "# rate: 1, 2, 5 or 10 (now %d Hz)", tx_hz);
+        out(b);
+    }
+    else if (!strcmp(c, "help")) out("# commands: header, status, reset (re-initialize from the OCV now), rate N (telemetry Hz), noise q N r N (noise sd factors), pins (wiring check), help");
     else { char b[80]; snprintf(b, sizeof(b), "# unknown command: %.40s (help)", c); out(b); }
 }
 
@@ -469,6 +587,9 @@ static void show(float I, float V, const dfn::EkfOut& o, unsigned long ms) {
     if (t_amb == t_amb) { p = fmt(p, t_amb, 1); *p++ = ' '; *p++ = '*'; *p++ = 'C'; } else { *p++ = '-'; *p++ = '-'; }
     *p = 0;
     draw_text(0, 42, b, 1);
+    p = b; memcpy(p, "LDP ", 4); p += 4;                                       // plating margin [mV]
+    p = fmt(p, o.ldp * 1e3, 0); *p++ = 'm'; *p++ = 'V'; *p = 0;
+    draw_text(128 - text_w(b, 1), 42, b, 1);
     p = b; memcpy(p, "DFN ", 4); p += 4;
     if (nus::connected()) { memcpy(p, "BLE ", 4); p += 4; }
     p = fmt(p, (double)ms, 0); *p++ = ' '; *p++ = 'm'; *p++ = 's'; *p = 0;
@@ -493,9 +614,7 @@ static void app_setup() {
     if (!ina_ok) board_swap_ina_pins();
     oled_init();
     nus::begin(BLE_NAME);
-#if HAVE_DHT
-    dht.begin();
-#endif
+    temp_detect();
     char b[200];
     snprintf(b, sizeof(b), "# DFN online EKF on the %s, model %s"
 #ifdef DFN_MODEL_SET
@@ -524,8 +643,64 @@ static void app_setup() {
 }
 
 // no cell voltage yet (or the state was lost): wait for a plausible voltage, then start from the OCV
+// the INA228 looked for again (both pin orientations), e.g. powered or wired after the start
+static bool ina_retry() {
+    sampler_paused = true;
+    delay(150);
+    bool ok = ina_init();
+    if (!ok) { board_swap_ina_pins(); ok = ina_init(); }
+    if (!ok) board_swap_ina_pins();
+    ina_ok = ok;
+    sampler_paused = false;
+    if (ok) out(ina_swapped ? "# INA228 found (SDA and SCL the other way round)" : "# INA228 found");
+    return ok;
+}
+// "pins": what the XIAO sees on the sensor pins and an I2C scan of the INA bus in both orientations
+static void pins_report() {
+    sampler_paused = true;
+    delay(150);
+    char b[200], *p;
+    const int pins[] = {D1, D4, D5, D10};
+    const char* names[] = {"D1", "D4", "D5", "D10"};
+    p = b; p += sprintf(p, "# pins (pull-down / pull-up):");
+    bool held_low = false;                                   // an I2C line at 0 even with the pull-up: bus held low
+    for (int k = 0; k < 4; ++k) {
+        pinMode(pins[k], INPUT_PULLDOWN); delay(2); int lo = digitalRead(pins[k]);
+        pinMode(pins[k], INPUT_PULLUP); delay(2); int hi = digitalRead(pins[k]);
+        pinMode(pins[k], INPUT);
+        p += sprintf(p, " %s %d/%d", names[k], lo, hi);
+        if ((pins[k] == D4 || pins[k] == D5) && hi == 0) held_low = true;
+    }
+    out(b);
+#if defined(ARDUINO_ARCH_ESP32)
+    snprintf(b, sizeof(b), "# D1 (NTC S): %u mV", (unsigned)analogReadMilliVolts(PIN_NTC));
+    out(b);
+#endif
+    if (held_low) {                                          // every address would time out: minutes for nothing
+        out("# I2C: a line of the INA bus (D4 / D5) is held at GND: scan skipped (short or damaged module)");
+        board_begin_i2c(); if (ina_swapped) { ina_swapped = false; board_swap_ina_pins(); }
+        sampler_paused = false;
+        return;
+    }
+    for (int o = 0; o < 2; ++o) {
+        if (o) board_swap_ina_pins();
+        p = b; p += sprintf(p, "# I2C SDA %s SCL %s:", ina_swapped ? "D5" : "D4", ina_swapped ? "D4" : "D5");
+        int n = 0;
+        for (uint8_t a = 0x08; a < 0x78; ++a) {
+            Wire.beginTransmission(a);
+            if (Wire.endTransmission() == 0) { p += sprintf(p, " 0x%02X", a); ++n; }
+        }
+        if (!n) p += sprintf(p, " nothing");
+        out(b);
+    }
+    board_swap_ina_pins();                                   // back to the orientation before
+    sampler_paused = false;
+    ina_retry();
+}
+
 static void wait_for_cell() {
-    static unsigned long last_msg = 0;
+    static unsigned long last_msg = 0, last_ina = 0;
+    if (!ina_ok && millis() - last_ina >= 10000UL) { last_ina = millis(); ina_retry(); }
     float V = mean_v();
     if (v_ok(V)) {
         crumb(1);
@@ -567,9 +742,7 @@ static void sensors_loop() {
     p = fmt(p, V, 4); p += sprintf(p, " V, I ");
     p = fmt(p, I * 1e3, 2); p += sprintf(p, " mA, T ");
     p = fmt(p, t_amb, 1); p += sprintf(p, " degC");
-#if HAVE_DHT && TEMP_NTC
-    p += sprintf(p, " (NTC S/VDD "); p = fmt(p, ntc_ratio, 4); sprintf(p, ")");
-#endif
+    if (t_kind == TEMP_KY013) { p += sprintf(p, " (NTC S/VDD "); p = fmt(p, ntc_ratio, 4); sprintf(p, ")"); }
     out(b);
     if (!oled_addr) return;
     memset(fb, 0, sizeof(fb));
@@ -587,7 +760,8 @@ static void sensors_loop() {
 #endif
 
 static dfn::EkfOut last_o;
-static bool have_o = false;
+static bool have_o = false, last_use = false, new_step = false;
+static void emit_row(unsigned long now);
 static unsigned long last_show = 0;
 
 static void app_loop() {
@@ -605,9 +779,7 @@ static void app_loop() {
     ble_ota::poll();                                        // update chunks to flash, rollback confirmation, reboot
 #endif
     crumb(31);
-#if HAVE_DHT
-    dht_poll();
-#endif
+    temp_poll();
     crumb(32);
 #ifdef SENSORS_ONLY
     sensors_loop();
@@ -620,7 +792,8 @@ static void app_loop() {
         crumb(33);
         show((float)(mean_i() + I_SELF_A), mean_v(), last_o, last_ms);
     }
-    if (now - t_prev < (unsigned long)STEP_S * 1000UL) { delay(5); return; }
+    if (have_o && now - t_row >= 1000UL / (unsigned long)tx_hz) emit_row(now);   // telemetry row
+    if (now - t_prev < (unsigned long)STEP_S * 1000UL) { delay(2); return; }
     crumb(20);
     double q; float V; int nsamp;
     take(&q, &V, &nsamp);
@@ -629,9 +802,19 @@ static void app_loop() {
     double dt = (now - t_prev) * 1e-3;
     float I = (float)(q / dt + I_SELF_A);
     t_prev = now;
-    Ah_counted += I * dt / 3600.0;
     unsigned long t0 = millis();
-    bool use = v_ok(V) && I == I;
+    t_ekf += dt;
+    if (ekf.held && t_ekf >= (double)dfn_model::hold_s) {    // two time scales: the parameters are free from now on
+        ekf.release();
+        out("# parameters released (end of the hold)");
+    }
+    bool sched = true;                                        // one voltage update per y_every_s after the burn-in
+    if (dfn_model::y_every_s > 0) {
+        const long slot = (long)floor(t_ekf / (double)dfn_model::y_every_s);
+        sched = slot != y_slot || t_ekf <= (double)dfn_model::y_burn_s;
+    }
+    bool use = v_ok(V) && I == I && sched;
+    if (use && dfn_model::y_every_s > 0) y_slot = (long)floor(t_ekf / (double)dfn_model::y_every_s);
     dfn::EkfOut o = ekf.step((real_t)I, (real_t)(use ? V : 3.7f), dfn_model::EKF_IDT, use);
     last_ms = millis() - t0;
     crumb(22);
@@ -642,9 +825,24 @@ static void app_loop() {
         return;
     }
     crumb(27);
-    int flags = (use ? 1 : 0) | (V < 3.3f ? 1 << 3 : 0) | (V < 3.0f ? 1 << 4 : 0) | (1 << 6)
-              | ((HAVE_DHT && t_amb == t_amb) ? 0 : 1 << 7) | (I < -0.01f ? 1 << 8 : 0);
-    char line[260], *p = line;
+    last_o = o; have_o = true; last_use = use; new_step = true;
+    keep_state(o);
+    crumb(28);
+}
+
+// one telemetry row: the measurements over its interval and the last EKF step
+static void emit_row(unsigned long now) {
+    double q; float V; int nsamp;
+    take_row(&q, &V, &nsamp);
+    const double dt = (now - t_row) * 1e-3;
+    t_row = now;
+    const float I = dt > 0 ? (float)(q / dt + I_SELF_A) : NAN;
+    if (I == I) Ah_counted += I * dt / 3600.0;
+    const dfn::EkfOut& o = last_o;
+    int flags = (last_use ? 1 : 0) | (new_step ? 1 << 1 : 0) | (V < 3.3f ? 1 << 3 : 0) | (V < 3.0f ? 1 << 4 : 0) | (1 << 6)
+              | (t_amb == t_amb ? 0 : 1 << 7) | (I < -0.01f ? 1 << 8 : 0);
+    new_step = false;
+    char line[300], *p = line;
     p = fmt(p, (now - t_start) * 1e-3, 1); *p++ = ',';
     p = fmt(p, V, 5); *p++ = ',';
     p = fmt(p, I, 5); *p++ = ',';
@@ -667,15 +865,14 @@ static void app_loop() {
     p = fmt(p, o.nit, 0); *p++ = ',';
     p = fmt(p, (double)last_ms, 0); *p++ = ',';
     p = fmt(p, (double)nsamp, 0); *p++ = ',';
-    p = fmt(p, dfn::TH.Tc, 2); *p = 0;
+    p = fmt(p, dfn::TH.Tc, 2); *p++ = ',';
+    p = fmt(p, o.Vb, 5); *p++ = ',';
+    p = fmt(p, o.sd_Vb, 5); *p++ = ',';
+    p = fmt(p, ekf.held ? 1.0 : 0.0, 0); *p++ = ',';
+    p = fmt(p, o.ldp, 5); *p = 0;
     crumb(23);
     out(line);
     crumb(24);
-    last_o = o; have_o = true; last_show = millis();
-    keep_state(o);
-    crumb(28);
-    show(I, V, o, last_ms);
-    crumb(25);
 }
 
 // The nRF52840 core runs setup() and loop() on a 4 KB stack: the start from the OCV (Newton closure, OCV inversion,

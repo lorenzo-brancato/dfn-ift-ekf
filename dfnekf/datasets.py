@@ -85,7 +85,12 @@ LP_FIT_B = {
 }
 # held out with set B: cycles 5-7 of the same block, same windowing (CYC20, cycles 1-4, overlaps the fit cycle)
 LP_VAL_B = {"AGE22V": dict(test="20261022_Ageing", start_time=44430.0, end_time=73745.0, T=20.0, dq="ocv")}
-LP_TESTS = {**LP_FIT, **LP_VAL, **LP_AGE, **LP_FIT_B, **LP_VAL_B}
+# 0 C capacity test (3 x: CC-CV charge, rest, 1C discharge to 2.75 V): all of it from the rest after the first charge
+# (CAP00A; its first cycle is CAP00F of fit set B), and only the cycles not in the fit, from the rest after the second
+# charge (CAP00V)
+LP_COLD = {"CAP00A": dict(test="20261016_Capacity_00°C", start_step=2, T=0.0, dq="ocv"),
+           "CAP00V": dict(test="20261016_Capacity_00°C", start_step=6, T=0.0, dq="ocv")}
+LP_TESTS = {**LP_FIT, **LP_VAL, **LP_AGE, **LP_FIT_B, **LP_VAL_B, **LP_COLD}
 # capacity checks at 20 C: mean 1C discharge capacity of the three CC-CV / 1 h rest / 1C cycles [A.h] (survey.py)
 LP_CAPCHECK = {"2026-10-09": 1.894, "2026-10-17": 1.934, "2026-10-18": 1.930, "2026-10-26": 1.922,
                "2026-10-29": 1.881, "2026-11-02": 1.794}

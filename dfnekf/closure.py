@@ -216,7 +216,11 @@ class Alg:
         ent = P.get("entropic")
         if ent is not None and csn is not None:
             dT, d0, dn, dp = ent
-            V = V + dT * (d0 + dn * (jnp.mean(csn) / P["cmax_n"] - 0.5) + dp * (jnp.mean(csp) / P["cmax_p"] - 0.5))
+            fn = P.get("entropic_fn")                     # optional dOCV/dT(x_s, dT) (e.g. a measured table)
+            if fn is not None:
+                V = V + dT * fn(jnp.mean(csn) / P["cmax_n"], dT)
+            else:
+                V = V + dT * (d0 + dn * (jnp.mean(csn) / P["cmax_n"] - 0.5) + dp * (jnp.mean(csp) / P["cmax_p"] - 0.5))
         return V
 
     # ---- guess and Newton
@@ -257,10 +261,14 @@ class Alg:
             def lsc(c):
                 return (~c[3]) & (c[0] > 1e-6)
             a, gn, rn_, ok = jax.lax.while_loop(lsc, ls, (1.0, g, r, False))
-            # if no descent step is found: take the full step
-            gn = jnp.where(ok, gn, g + dg)
-            rn_ = jnp.where(ok, rn_, res(g + dg))
-            return gn, rn_, k + 1
+            # if no descent step is found: take the full step, unless its residual is not finite (sinh overflow at a
+            # saturated surface): then stay, so the solver ends finite and the fallbacks of solve_robust start from here
+            rf = res(g + dg)
+            fin = jnp.isfinite(jnp.linalg.norm(rf))
+            gn = jnp.where(ok, gn, jnp.where(fin, g + dg, g))
+            rn_ = jnp.where(ok, rn_, jnp.where(fin, rf, r))
+            k_next = jnp.where(ok | fin, k + 1, maxit)          # stuck: stop this Newton
+            return gn, rn_, k_next
         g, r, k = jax.lax.while_loop(cond, body, (g0, res(g0), 0))
         return g, jnp.linalg.norm(r, jnp.inf), k
 
@@ -297,8 +305,10 @@ class Alg:
         is tried first among the fallbacks (the paper's sets never reach these branches with a non-finite residual)."""
         g, r, k = self.newton(gprev, csn, csp, ce, I, th, tol=tol, imp=imp)
         safe = bool(self.P.get("soft_edges"))
-        better = (lambda a, b: jnp.isfinite(a) & ~(a >= b)) if safe else (lambda a, b: a < b)      # a better than b; NaN b loses to finite a
-        bad = (lambda r_: ~(r_ <= tol)) if safe else (lambda r_: r_ > tol)
+        # a non-finite residual is never "converged" (with r > tol a NaN passed as converged and its NaN state then ran
+        # through the rest of the simulation); on finite residuals both tests equal the plain comparisons
+        better = lambda a, b: jnp.isfinite(a) & ~(a >= b)      # a better than b; NaN b loses to finite a
+        bad = lambda r_: ~(r_ <= tol)
 
         def retry(_):
             if safe:

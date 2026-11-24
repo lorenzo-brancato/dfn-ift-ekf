@@ -43,7 +43,8 @@ def main():
     rows = []
     for k in keys:
         ds, pr = C.ALL[k], prof[k]
-        V, res, xs, ys = m.simulate(C.model_params(p), pr, ds["T"], dq=C.dq_of(p, ds, pr, m), full=True)
+        pk = C.params_for(p, ds)                     # the test's cell window (LG M50), else p
+        V, res, xs, ys = m.simulate(C.model_params(pk), pr, ds["T"], dq=C.dq_of(p, ds, pr, m), full=True)
         e = (V - pr["V"]) * 1e3
         w = pr["dt"] / pr["dt"].sum()
         ok = np.isfinite(e)

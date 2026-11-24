@@ -23,13 +23,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--q-window", type=float, required=True)
+    ap.add_argument("--scaled", action="store_true",
+                    help="full scale = --q-window x the measured 1C capacity fade, interpolated across the block (soc_ref.reference)")
+    ap.add_argument("--q-window-run", action="store_true", help="full scale = the run's own OCV window at each anchor (LLI runs: Q_window_Ah)")
     ap.add_argument("--pattern", default="ekf_*_e+0.00.npz", help="run files in each folder (e.g. ekf_*_e-*.npz: the SOC 50 %% starts)")
     a = ap.parse_args()
     rows = []
     for r in a.runs:
         for f in sorted(glob.glob(os.path.join(r, a.pattern))):
             d = np.load(f, allow_pickle=True)
-            ref, anc, _ = soc_reference(d["t"], d["I"], q_window=a.q_window)
+            qw = d["Q_window_Ah"] if (a.q_window_run and "Q_window_Ah" in d) else a.q_window
+            if a.scaled:
+                from soc_ref import reference
+                ref, anc, _ = reference(d["t"], d["I"], os.path.basename(f).split("_")[1], a.q_window)
+            else:
+                ref, anc, _ = soc_reference(d["t"], d["I"], q_window=qw)
             k = anc[0] if anc else 0
             es = 100 * (d["soc"] - ref)[k:]; sd = 100 * d["sd_soc"][k:]
             inn, Sy = d["innov"][k:], d["Sy"][k:]
