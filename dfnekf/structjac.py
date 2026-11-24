@@ -31,7 +31,7 @@ class Struct:
         m = self.m; n, Nn, Np = self.n, m.Nn, m.Np
         Cn, Cp = m.part_consts(th)
         if m.dlaw is not None:
-            Cp = m.cathode_consts(z[self.ic][Nn:], th)
+            Cp = m.cathode_consts(m.cp_law_of(z), th)
         E, G = m.elec_mats(th) if em is None else em
         def per_node(vn, vp):          # vn [...] (shared), vp [...] or [..., Np] (per node): anode/cathode -> [..., n]
             vp = vp if (m.dlaw is not None and jnp.ndim(vp) == jnp.ndim(vn) + 1) else jnp.repeat(vp[..., None], Np, -1)
@@ -81,17 +81,29 @@ class Struct:
         return Sw, -X.T @ Ft, X
 
     def sens_kp(self, X, g, z, I, th, em=None):
-        """(n+1) x Np: dj/dc_avg,p and dV/dc_avg,p through the implicit closure's cathode k (D_p(y) law)."""
-        m = self.m; A_ = m.A; ip = self.ic[m.Nn:]
+        """(n+1) x Np: dj and dV with respect to the D_p(y) law's concentrations (step.DFN.cp_law_of), through the implicit
+        closure's cathode k. Times law_sel() for the columns of z."""
+        m = self.m; A_ = m.A
         csn, csp, ce = m.surf(z)
-        Fc = jax.jacfwd(lambda c_: A_.residual(g, csn, csp, ce, I, th, m.imp_coeffs(z.at[ip].set(c_), th, None, em)))(z[ip])
+        Fc = jax.jacfwd(lambda c_: A_.residual(g, csn, csp, ce, I, th, m.imp_coeffs(z, th, None, em, cp_law=c_)))(m.cp_law_of(z))
         return -X.T @ Fc
 
+    def law_sel(self):
+        """Np x nz: d cp_law / dz (step.DFN.cp_law_of is linear): unit on c_avg,p, wsurf on the cathode's a_m and s_k."""
+        m = self.m; Np, Nn = m.Np, m.Nn
+        r = jnp.arange(Np)
+        L = jnp.zeros((Np, m.nz)).at[r, self.ic[Nn:]].set(1.0)
+        if m.wsurf != 0.0:
+            for rows in (self.ia, self.is_):
+                for k in range(rows.shape[0]):
+                    L = L.at[r, rows[k, Nn:]].set(m.wsurf)
+        return L
+
     def dlaw_cols(self, z, g, th, consts=None, em=None):
-        """nz x Np: the step's dependence on the cathode mean concentrations through the D_p(y) law (Lambda and B of the
-        cathode are functions of c_avg,p), at fixed flux. Added to the EKF's low-rank part with selectors of c_avg,p."""
+        """nz x Np: the step's dependence on the D_p(y) law's concentrations (Lambda and B of the cathode are functions of
+        them), at fixed flux. Added to the EKF's low-rank part with the rows law_sel()."""
         m = self.m
-        cp = z[self.ic][m.Nn:]
+        cp = m.cp_law_of(z)
         return jax.jacfwd(lambda c_: m.advance(z, g, th, consts, em, cp_law=c_))(cp)
 
     def C_of(self, Sw):
@@ -109,10 +121,10 @@ class Struct:
         Sw, Sth, X = self.sens(lu, g, z, I, th, imp=imp)
         C = self.C_of(Sw)
         if m.dlaw is not None and imp is not None:
-            C = C.at[:, self.ic[m.Nn:]].add(self.sens_kp(X, g, z, I, th))
+            C = C + self.sens_kp(X, g, z, I, th) @ self.law_sel()
         Azz = self.lam_dense(dvec, E) + Bm @ C[:n]
         if m.dlaw is not None:
-            Azz = Azz.at[:, self.ic[m.Nn:]].add(self.dlaw_cols(z, g, th))
+            Azz = Azz + self.dlaw_cols(z, g, th) @ self.law_sel()
         dir_th = jax.jacfwd(lambda t: m.advance(z, g, t))(th)               # direct dependence of Lambda, B, E, G on theta (g fixed)
         Jth_z = Bm @ Sth[:n] + dir_th
         Jz = jnp.concatenate([Azz, C[n:n + 1]], 0)

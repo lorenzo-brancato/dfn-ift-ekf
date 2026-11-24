@@ -17,6 +17,7 @@ class DFN:
         self.grid = grid; self.A = Alg(P, Nn, Ns, Np, "linear", "inv_mean", ratio_of(grid))
         self.N, self.nel = self.A.N, Nn + Np
         self.dlaw = P.get("dp_law")                      # cathode D_s(y), frozen per step (None: constant D_p)
+        self.wsurf = float(self.dlaw.get("wsurf", 0.0)) if self.dlaw is not None else 0.0   # law at y_mean + w (y_surf - y_mean)
         self.implicit = bool(P.get("implicit_closure", False))   # closure at the end-of-step concentrations (Alg.state_imp)
         self.ds_on = P.get("ds_on", "n")                 # electrode whose D_s the multiplier theta[2] scales ('n': the paper)
         n = self.nel
@@ -59,9 +60,19 @@ class DFN:
         Cp = pt.consts(P["Rp"], P["Ds_p"] * dp, dt, self.Nm, self.K)
         return Cn, Cp
 
+    def cp_law_of(self, z):
+        """The cathode concentrations the D_p(y) law is evaluated at: c_avg + wsurf (c_surf - c_avg), with c_surf the state's
+        surface value at the start of the step (c_avg + sum a + sum s; MPM-LE's Dp_wsurf, surface lagged by one sample).
+        wsurf = 0: the mean stoichiometry. Linear in z (Struct.law_sel)."""
+        c, a, s, _ = self.split(z)
+        Nn = self.Nn
+        if self.wsurf == 0.0:
+            return c[Nn:]
+        return c[Nn:] + self.wsurf * (a[:, Nn:].sum(0) + s[:, Nn:].sum(0))
+
     def dp_factor(self, cavg_p):
-        """D_p(y) / D_p of the cathode law P["dp_law"] = dict(drop, shape, y0, y1): 10^(-drop u^shape),
-        u = max(y - y0, 0) / (y1 - y0), y = c_avg / c_max the particle's mean stoichiometry."""
+        """D_p(y) / D_p of the cathode law P["dp_law"] = dict(drop, shape, y0, y1[, wsurf]): 10^(-drop u^shape),
+        u = max(y - y0, 0) / (y1 - y0), y = c / c_max at the law's concentrations (cp_law_of)."""
         d = self.dlaw
         u = jnp.maximum((cavg_p / self.P["cmax_p"] - d["y0"]) / (d["y1"] - d["y0"]), 0.0)
         return 10.0 ** (-d["drop"] * (u + 1e-12) ** d["shape"])
@@ -73,7 +84,7 @@ class DFN:
         mult = th[2] if self.ds_on == "p" else 1.0
         return pt.consts(self.P["Rp"], self.P["Ds_p"] * mult * self.dp_factor(cavg_p), dt, self.Nm, self.K)
 
-    def imp_coeffs(self, z, th, consts=None, em=None):
+    def imp_coeffs(self, z, th, consts=None, em=None, cp_law=None):
         """(k_n, k_p, E, G) for the implicit closure (closure.Alg.state_imp): k = d c_surf / d j over one step (ZOH flux)
         from the modal constants, (3 dt / R + sum gain + sum (1 - rho) W) / F, k_p per node with the D_p(y) law; E, G
         the electrolyte's exact step maps. None unless P["implicit_closure"]."""
@@ -81,7 +92,7 @@ class DFN:
             return None
         Cn, Cp = self.part_consts(th) if consts is None else consts
         if self.dlaw is not None:
-            Cp = self.cathode_consts(z[self.sl["c"]][self.Nn:], th)
+            Cp = self.cathode_consts(self.cp_law_of(z) if cp_law is None else cp_law, th)
         E, G = self.elec_mats(th) if em is None else em
         k = lambda C: (3.0 * C["dt"] / C["R"] + jnp.sum(C["gain"], 0) + jnp.sum((1 - C["rho"]) * C["W"], 0)) / F
         return k(Cn), k(Cp), E, G
@@ -124,15 +135,15 @@ class DFN:
 
     # ---- integration
     def advance(self, z, g, th, consts=None, em=None, cp_law=None):
-        """One step with the flux g[:n_el] held (ZOH). cp_law: the cathode mean concentrations the D_p(y) law is evaluated at
-        (default: those of z), so that its Jacobian can be taken apart (structjac.Struct.dlaw_cols)."""
+        """One step with the flux g[:n_el] held (ZOH). cp_law: the cathode concentrations the D_p(y) law is evaluated at
+        (default: cp_law_of(z)), so that its Jacobian can be taken apart (structjac.Struct.dlaw_cols)."""
         Cn, Cp = self.part_consts(th) if consts is None else consts
         E, G = self.elec_mats(th) if em is None else em
         c, a, s, ce = self.split(z)
         Nn = self.Nn
         jn, jp = g[:Nn], g[Nn:Nn + self.Np]
         if self.dlaw is not None:
-            Cp = self.cathode_consts(c[Nn:] if cp_law is None else cp_law, th)
+            Cp = self.cathode_consts(self.cp_law_of(z) if cp_law is None else cp_law, th)
         stn = pt.step((c[:Nn], a[:, :Nn], s[:, :Nn]), jn, Cn)
         stp = pt.step((c[Nn:], a[:, Nn:], s[:, Nn:]), jp, Cp)
         c2 = jnp.concatenate([stn[0], stp[0]]); a2 = jnp.concatenate([stn[1], stp[1]], axis=1)

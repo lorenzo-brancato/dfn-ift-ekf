@@ -62,6 +62,8 @@ def params_for(cs, cell, T_K=None, film_share=0.0, ds_on="n", ea=None):
     e = t["electrolyte"]
     P["kappa"] = float(np.interp(T, e["T_K"], e["kappa"]))
     P["De"] = float(np.interp(T, e["T_K"], e["De"]))
+    if "tdf" in e:                                # thermodynamic factor chi(c_e0, T) (MPM-LE tdf_T); absent: P's value at T_ref
+        P["tdf"] = float(np.interp(T, e["T_K"], e["tdf"]))
     P["T"] = T
     P["soft_edges"] = True
     P["soft_eps"] = 1e-2      # edge width [c_max]: 1e-3 leaves the closure ill-conditioned (cond ~5e11) when a fast CV charge
@@ -69,6 +71,7 @@ def params_for(cs, cell, T_K=None, film_share=0.0, ds_on="n", ea=None):
     P["implicit_closure"] = True
     P["entropic"] = (T - T_ref, t["dUdT0"], t["dUdT_n"], t["dUdT_p"])
     P["dp_law"] = {k: float(cs["dp_law"][k]) for k in ("drop", "shape", "y0", "y1")}
+    P["dp_law"]["wsurf"] = float(cs["dp_law"].get("wsurf", 0.0))      # step.DFN.cp_law_of
     P["ocp_n"] = _table(cs["ocp"]["n"]["x"], cs["ocp"]["n"]["U"])
     P["ocp_p"] = _table(cs["ocp"]["p"]["y"], cs["ocp"]["p"]["U"])
     return P

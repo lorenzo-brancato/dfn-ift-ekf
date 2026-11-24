@@ -174,7 +174,7 @@ class EKF:
         if m.dlaw is not None:                                              # D_p(y): Lambda, B (and k) depend on c_avg,p
             Ul = S.dlaw_cols(z_adv, gl, th, consts, em)                         # nz x Np, selected by c_avg,p
             if imp is not None:
-                C = C.at[:, S.ic[m.Nn:]].add(S.sens_kp(X, gl, z, I, th, em))
+                C = C + S.sens_kp(X, gl, z, I, th, em) @ S.law_sel()
         else:
             Ul = jnp.zeros((nz, 0))
         dv = self.dval_dc(c) * self.sign                                    # dtheta_full[idx]/dc
@@ -207,7 +207,7 @@ class EKF:
         U = jnp.concatenate([Bm_aug, Dcols, Lcols], 1)
         Cj = jnp.concatenate([L["C"][:nj], L["Cth"][:nj]], 1)
         Esel = jnp.zeros((nd, n)).at[jnp.arange(nd), nz + jnp.array(L["dl"], dtype=int)].set(1.0) if nd else jnp.zeros((0, n))
-        Lsel = jnp.zeros((nl, n)).at[jnp.arange(nl), jnp.asarray(self.S.ic[self.m.Nn:])].set(1.0) if nl else jnp.zeros((0, n))
+        Lsel = jnp.concatenate([self.S.law_sel(), jnp.zeros((nl, n - nz))], 1) if nl else jnp.zeros((0, n))
         Vt = jnp.concatenate([Cj, Esel, Lsel], 0)
         return U, Vt
 

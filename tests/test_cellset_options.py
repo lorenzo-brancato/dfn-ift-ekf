@@ -2,6 +2,7 @@
 D_s(y) law frozen per step, and the implicit (end-of-step) closure. No external data: they run on Chen2020."""
 import numpy as np
 import jax.numpy as jnp
+import pytest
 
 from dfnekf import params as prm, particles as pt
 from dfnekf.rom import simulate
@@ -34,13 +35,15 @@ def test_dp_law_without_drop_is_constant_D():
     np.testing.assert_allclose(V1, V0, atol=1e-10)
 
 
-def test_ift_jacobian_with_all_options():
+@pytest.mark.parametrize("wsurf", [0.0, 0.7])
+def test_ift_jacobian_with_all_options(wsurf):
     """The structured Jacobian (structjac.jac_full: implicit closure, D_p(y) columns, k_p sensitivity, entropic V) agrees
-    with automatic differentiation through the converged implicit Newton closure."""
+    with automatic differentiation through the converged implicit Newton closure; wsurf > 0: the D_p(y) law at
+    y_mean + wsurf (y_surf - y_mean) (Struct.law_sel)."""
     import jax
     from dfnekf.structjac import Struct
     P = dict(prm.base(), implicit_closure=True, ds_on="p", R_contact=1e-3, entropic=(3.0, 4e-4, -1e-3, 0.0),
-             dp_law=dict(drop=1.5, shape=1.4, y0=0.3, y1=0.95))
+             dp_law=dict(drop=1.5, shape=1.4, y0=0.3, y1=0.95, wsurf=wsurf))
     dt = 5.0
     m = DFN(P, *DIMS, 2, dt, "4:1"); S = Struct(m)
     th = jnp.array([1.5, 0.95, 0.8])
