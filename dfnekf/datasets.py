@@ -228,7 +228,14 @@ def _load_mohtat(test, dt=None):
     cfg = json.load(open(os.path.join(d, "config.json"), encoding="utf-8"))
     out = dict(t=df.t_s.values.astype(float), I=df.I_A.values.astype(float), V=df.V_V.values.astype(float),
                T=df.T_C.values.astype(float), valid=(df.eis.values == 0))
-    if dt is not None and abs(dt - float(cfg["dt_s"])) > 1e-9:
+    n_up = float(cfg["dt_s"]) / dt if dt is not None else 1.0
+    if dt is not None and dt < float(cfg["dt_s"]) and abs(n_up - round(n_up)) < 1e-9:
+        # finer steps than the data: each sample (I = the mean over [t, t + dt_s)) is held over round(n_up) steps; V, T and
+        # the valid flag are repeated, so use one voltage update per data sample (ekf_exp --y-every-s dt_s)
+        n_up = int(round(n_up))
+        out = {k: np.repeat(v, n_up) for k, v in out.items()}
+        out["t"] = out["t"][0] + dt * np.arange(len(out["t"]))
+    elif dt is not None and abs(dt - float(cfg["dt_s"])) > 1e-9:
         b = bin_uniform(dict(out, step=np.zeros(len(out["t"]), int)), dt, extra=("T",), flags=("valid",))
         out = {k: b[k] for k in ("t", "I", "V", "T", "valid")}
     return dict(**out, T_C=float(np.mean(out["T"])), dt=float(cfg["dt_s"]) if dt is None else float(dt),

@@ -1,7 +1,7 @@
-"""Export of the MPM-LE fit B (mpmle_identification study mohtat_B_fin) to the physical (SI) parameters of the
+"""Export of the MPM-LE fit B (mpmle_identification study mohtat_B_fin3) to the physical (SI) parameters of the
 grey-box DFN, as one dfnekf cell-set JSON (schema dfnekf-cellset-1, read by dfnekf.cellset).
 
-    python scripts/mohtat_phm/export_fitB.py                      # defaults: the study below -> data/exp_Mohtat/params/mohtat_B_fin.json
+    python scripts/mohtat_phm/export_fitB.py                      # defaults: the study below -> data/exp_Mohtat/params/mohtat_B_fin3.json
 
 Same mapping as scripts/export_mohtat_lm3c.py (see its docstring), with the options of case B:
   theta_ref_C = 0  : theta_n, theta_p are the diffusion times at 0 degC; back to 25 degC through Ea_Dn, Ea_Dp
@@ -71,9 +71,9 @@ def r_hat(l_s, r_np, eps_n, eps_s, eps_p, brugg, N, ratio, npc=FV_GROUPS[0], ns=
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--study", default=os.path.join(MPMLE, "runs", "studies", "mohtat_B_fin"))
-    ap.add_argument("--config", default=os.path.join(MPMLE, "configs", "mohtat_B_fin.json"))
-    ap.add_argument("--out", default=os.path.join(REPO, "data", "exp_Mohtat", "params", "mohtat_B_fin.json"))
+    ap.add_argument("--study", default=os.path.join(MPMLE, "runs", "studies", "mohtat_B_fin3"))
+    ap.add_argument("--config", default=os.path.join(MPMLE, "configs", "mohtat_B_fin3.json"))
+    ap.add_argument("--out", default=os.path.join(REPO, "data", "exp_Mohtat", "params", "mohtat_B_fin3.json"))
     a = ap.parse_args()
     import pybamm
 

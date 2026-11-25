@@ -33,7 +33,7 @@ import mohtat_openloop as mo  # noqa: E402
 
 MPMLE_HELDOUT = os.path.join(os.environ.get("MPMLE_ROOT", r"C:\Users\alexa\OneDrive - Politecnico di Milano\Desktop"
                                                           r"\Batteries\Python codes\MIONet\mpmle_identification"),
-                             "runs", "studies", "mohtat_B_fin", "heldout_val_rmse.csv")
+                             "runs", "studies", "mohtat_B_fin3", "heldout_val_rmse.csv")
 
 
 def run_T(cs, cell, df, dt, dims, grid, dt_max, q0, dT):
@@ -65,7 +65,7 @@ def run_T(cs, cell, df, dt, dims, grid, dt_max, q0, dT):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--set", default=os.path.join(ROOT, "data", "exp_Mohtat", "params", "mohtat_B_fin.json"))
+    ap.add_argument("--set", default=os.path.join(ROOT, "data", "exp_Mohtat", "params", "mohtat_B_fin3.json"))
     ap.add_argument("--data", default=datasets.MOHTAT_TESTS)
     ap.add_argument("--cells", default="C08")
     ap.add_argument("--tests", default="VAL")

@@ -102,10 +102,21 @@ def main():
     ap.add_argument("--q-q", type=float, default=0.0,
                     help="[soc] process noise on the cell's charge: random walk of sd q_q [A.h per sqrt(h)] along the "
                          "lithium-conserving direction (anode and cathode means together); 0: none")
+    ap.add_argument("--r-i-mV", type=float, default=0.0,
+                    help="[soc] model-error sd that grows with the current: R_k = sigma^2 + (r_i |I_k| / Q_nom)^2 + ... [mV per C-rate]")
+    ap.add_argument("--r-cold-mV", type=float, default=0.0,
+                    help="[soc] ... + (r_cold max(0, T_ref - T_k) / 10 K)^2: model-error sd per 10 K below T_ref [mV]")
+    ap.add_argument("--q-q-i", type=float, default=0.0,
+                    help="[soc] charge random walk proportional to the current: sd q_q_i |I| / Q_nom [A.h per sqrt(h)] along the "
+                         "same lithium-conserving direction as --q-q")
+    ap.add_argument("--q-nom-ah", type=float, default=5.0, help="nominal capacity for the C-rate of --r-i-mV / --q-q-i [A.h]")
     ap.add_argument("--soc-vlim", default=None,
                     help="[soc] V_max,V_min: SOC from the stoichiometry, on the window between the model OCVs V_max and V_min "
                          "(SOC = (y_0 - y) / (y_0 - y_100), anode (x - x_0) / (x_100 - x_0)); the Coulomb-counting reference is "
                          "normalised by the same window. Default: the set's window (q_ocv_Ah wide)")
+    ap.add_argument("--ref-anchor-v", type=float, default=4.19,
+                    help="[soc] reset the Coulomb-counting reference to SOC 100 %% at the end of every CV phase at V >= this [V] "
+                         "(0: plain count from the start)")
     ap.add_argument("--soc0", type=float, default=None,
                     help="[soc] start every run at this SOC (fraction of the window, Q_ref) instead of truth + --soc-err")
     ap.add_argument("--li-sigma-Ah", type=float, default=None,
@@ -133,7 +144,8 @@ def main():
     ap.add_argument("--max-hours", type=float, default=None)
     ap.add_argument("--t-cell", default=None,
                     help="folder of vtemp_<test>.npz (virtual_temperature.py, or a measured surface temperature in the same "
-                         "format): the model is evaluated at this uniform cell temperature at every step (EKF.set_temperature_law)")
+                         "format), or 'measured' for the test's own temperature column: the model is evaluated at this uniform "
+                         "cell temperature at every step (EKF.set_temperature_law)")
     ap.add_argument("--adaptive", action="store_true",
                     help="variable step from the --dt grid: a step ends when the current leaves the band of its first sample "
                          "(|I - I_0| > --adapt-rel |I_0| + --adapt-abs) or after --adapt-max s; model current = the step's mean, "
@@ -149,6 +161,9 @@ def main():
                     help="no voltage update at a step whose closure residual ||F||_inf exceeds this (its V is not converged)")
     ap.add_argument("--innov-clip-mV", type=float, default=None, help="innovation used for the state update clipped to +-this [mV]")
     ap.add_argument("--p0-vb-mV", type=float, default=20.0, help="prior sd of the voltage bias Vb (coords ... ,Vb) [mV]")
+    ap.add_argument("--vb-tau-s", type=float, default=None,
+                    help="Vb as a Gauss-Markov process with this correlation time [s] and stationary sd --p0-vb-mV (prior and "
+                         "process noise sd sqrt(1 - phi^2) per step); default: random walk (--q-vb-mV)")
     ap.add_argument("--q-vb-mV", type=float, default=0.5, help="random walk of the voltage bias [mV per sqrt(s)]")
     ap.add_argument("--hold-vb", action="store_true", help="with --th-hold-s: hold the voltage bias too (default: free)")
     ap.add_argument("--th-hold-s", type=float, default=None,
@@ -197,9 +212,10 @@ def main():
         gaps = np.diff(t)
         if np.any(np.abs(gaps - dt) > 1e-6):
             print("warning: %d gaps in the %g-s grid (max %.0f s), treated as %g s" % (np.sum(np.abs(gaps - dt) > 1e-6), dt, gaps.max(), dt))
-    if a.t_cell:                            # cell temperature input on the data grid (before the adaptive steps average it)
+    if a.t_cell and a.t_cell != "measured":  # cell temperature input on the data grid (before the adaptive steps average it)
         vt = np.load(os.path.join(a.t_cell, "vtemp_%s.npz" % d["test"]))
         d = {**d, "T": np.interp(d["t"], vt["t"], vt["T_C"])}
+    if a.t_cell:
         print("cell temperature input: %s, %.1f..%.1f C" % (a.t_cell, d["T"].min(), d["T"].max()), flush=True)
     dts = None
     if a.adaptive:
@@ -276,7 +292,8 @@ def main():
         tl = cs["temperature"]; e_ = tl["electrolyte"]
         ek.set_temperature_law(dict(T_ref=cs["T_ref_K"], Ea_Dn=tl["Ea_Dn"], Ea_Dp=a.ea_dp or tl["Ea_Dp"], Ea_r=tl["Ea_r"],
                                     Ea_s=tl["Ea_s"], kappa_T=(e_["T_K"], e_["kappa"]), De_T=(e_["T_K"], e_["De"]),
-                                    dUdT0=tl["dUdT0"], dUdT_n=tl["dUdT_n"], dUdT_p=tl.get("dUdT_p", 0.0)))
+                                    dUdT0=tl["dUdT0"], dUdT_n=tl["dUdT_n"], dUdT_p=tl.get("dUdT_p", 0.0),
+                                    tdf_T=(e_["T_K"], e_["tdf"]) if "tdf" in e_ else None))
         T_cell = jnp.asarray(np.asarray(d["T"], float) + 273.15)
     ek.keep_x = bool(a.headroom_every_s)    # the states are needed for the charging headroom
     ek.innov_clip = None if a.innov_clip_mV is None else a.innov_clip_mV * 1e-3
@@ -287,7 +304,20 @@ def main():
     sd_shell = a.p0_shell * np.concatenate([np.full(m.Nn, P["cmax_n"]), np.full(m.Np, P["cmax_p"])])
     sd_rest = np.concatenate([np.full(m.Nm * nel, 1.0), np.full(m.K * nel, 1.0), np.full(m.N, 3.0)])
     R = (a.sigma_mV * 1e-3) ** 2
-    run = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I, jnp.asarray(y_f), tfac=tfac, dts=dts, T_cell=T_cell))
+    crate = np.abs(np.asarray(I, float)) / a.q_nom_ah
+    R_seq = None
+    if a.r_i_mV or a.r_cold_mV:             # model error growing with the C-rate and the cold (measured T)
+        Tk = np.asarray(d["T"], float) if len(d["T"]) == len(crate) else np.full(len(crate), d["T_C"])
+        R_seq = jnp.asarray(1e-6 * (a.sigma_mV ** 2 + (a.r_i_mV * crate) ** 2
+                                    + (a.r_cold_mV * np.maximum(0.0, cs["T_ref_K"] - 273.15 - Tk) / 10.0) ** 2))
+    QV = {}                                 # --q-q-i: the charge direction (as run_soc's v) and the per-step variance
+    if a.q_q_i:
+        cc_ = cs["cells"][cell]; vq = np.zeros(ek.n)
+        vq[:m.Nn] = -P["cmax_n"] / cc_["Q_n"]; vq[m.Nn:m.nel] = P["cmax_p"] / cc_["Q_p"]
+        QV["dir"] = jnp.asarray(vq)
+    qv_seq = jnp.asarray((a.q_q_i * crate) ** 2 * dt / 3600.0) if a.q_q_i else None
+    run = jax.jit(lambda x0, P0, Qd: ek.run(x0, P0, Qd, R, I, jnp.asarray(y_f), tfac=tfac, dts=dts, T_cell=T_cell, R_seq=R_seq,
+                                            qdir=QV.get("dir"), qv_seq=qv_seq))
     if a.th_hold_s and coords and a.start == "soc":
         # two time scales: the parameters are held at their prior values for the first th_hold_s seconds (negligible
         # variance, no random walk, no cross-covariance: only the DFN state, i.e. SOC, is corrected), then released with
@@ -425,6 +455,37 @@ def window_lli(cs, cell, vmax, vmin, T_K, dxw, llis=np.linspace(-0.1, 0.6, 141),
     return dict(lli=llis, **{k: np.array(v) for k, v in out.items()})
 
 
+def anchor_cv(q_ref, I, y, q_top, vtop, dts, ilim=0.02, min_cv_s=300.0):
+    """Coulomb-counting reference pinned to the top of the window (SOC 100 %) at the end of every CV phase: charging
+    (I < -ilim) at V >= vtop for at least min_cv_s, then the current stops or reverses, or the data end. Between the start
+    (q_ref[0], the placed charge) and an anchor, or between two anchors, the count's drift at the anchor (current offset,
+    coulombic efficiency) is spread in proportion to the charge throughput, so the reference is 100 % at every anchor and
+    stays monotone within each CC phase; after the last anchor it is the plain count from it.
+    Returns the pinned charge, the anchor indices and the drifts [A.h] removed at them."""
+    I = np.asarray(I, float)
+    cv = (I < -ilim) & (np.nan_to_num(y) >= vtop)
+    dts = np.broadcast_to(np.asarray(dts, float), I.shape)
+    dq = I * dts / 3600.0
+    ends, dur = [], 0.0
+    for k in range(len(I)):
+        dur = dur + dts[k] if cv[k] else 0.0
+        last = k == len(I) - 1
+        if cv[k] and dur >= min_cv_s and (last or (not cv[k + 1] and I[k + 1] > -ilim)):
+            ends.append(k)
+    q = np.array(q_ref, float)
+    jumps, a = [], 0
+    for b in ends:
+        cnt = q[a] + np.cumsum(np.r_[0.0, dq[a + 1:b + 1]])          # forward count from the anchor a
+        drift = q_top - cnt[-1]
+        w = np.cumsum(np.r_[0.0, np.abs(dq[a + 1:b + 1])]); w = w / w[-1] if w[-1] > 0 else w
+        q[a:b + 1] = cnt + drift * w
+        jumps.append(drift)
+        a = b
+    if a < len(I) - 1:
+        q[a:] = q[a] + np.cumsum(np.r_[0.0, dq[a + 1:]])
+    return q, ends, jumps
+
+
 def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w, sd_shell, sd_rest, dt, tag, I, th_true):
     """The SOC experiment: open loop and EKF from the wrong starts q0 + err; returns the csv rows."""
     c = cs["cells"][cell]
@@ -451,6 +512,10 @@ def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w,
     x0w, y0w = c["x100"] - q_bot / c["Q_n"], c["y100"] + q_bot / c["Q_p"]
     print("SOC window: q %.3f..%.3f A.h (%.3f A.h); x %.4f..%.4f, y %.4f..%.4f" % (q_top, q_bot, Q_ref, x0w, x100w, y100w, y0w), flush=True)
     q_ref = q0 + np.cumsum(I_np * d.get("dts", dt)) / 3600.0   # charge below the top after each step [A.h]
+    if a.ref_anchor_v > 0:
+        q_ref, ends, jumps = anchor_cv(q_ref, I_np, np.asarray(y), q_top, a.ref_anchor_v, d.get("dts", dt))
+        print("reference pinned to SOC 100 %% at %d CV ends; Coulomb-count drift removed there [mA.h]: %s"
+              % (len(ends), [round(1e3 * j, 1) for j in jumps]), flush=True)
     soc_ref = (q_bot - q_ref) / Q_ref                          # reference: Coulomb counting on the same window
     errs = [float(e) for e in a.soc_err.split(",")]
     if a.soc0 is not None:                  # absolute start at soc0 of the window
@@ -482,6 +547,9 @@ def run_soc(a, d, cs, cell, m, ek, run, z_of, q0, y, t, I_np, coords, tv, rng_w,
     Qd = np.r_[qz, a.q_th * rng_w * np.sqrt(dt) / dc]
     if "Vb" in coords:                      # the voltage bias: its own random walk [V per sqrt(s)]
         Qd[nz + coords.index("Vb")] = a.q_vb_mV * 1e-3 * np.sqrt(dt) / dc[coords.index("Vb")]
+        if a.vb_tau_s:                      # or Gauss-Markov: stationary sd p0_vb, correlation time tau
+            ek.vb_tau = a.vb_tau_s
+            Qd[nz + coords.index("Vb")] = a.p0_vb_mV * 1e-3 * np.sqrt(1.0 - np.exp(-2.0 * dt / a.vb_tau_s)) / dc[coords.index("Vb")]
     if a.q_q > 0:
         # random walk on the cell's charge along the lithium-conserving direction v (all anode means move together, all
         # cathode means opposite): SOC uncertainty without roughening the particle profiles. sd q_q A.h per sqrt(h).
